@@ -1,4 +1,4 @@
-import { GSwapAPI, SwapResult } from '../api/gswap';
+import { GSwapAPI, SwapResult, SwapQuote } from '../api/gswap';
 import { ArbitrageOpportunity } from '../strategies/arbitrage';
 import { config } from '../config';
 
@@ -23,8 +23,10 @@ class TradeCancelledError extends Error {
 
 export class TradeExecutor {
   private activeTrades: Map<string, TradeExecution> = new Map();
-  private maxRetries = 1;
-  private retryDelay = 2000; // 2 seconds
+  private maxRetries = 3;
+  private readonly baseRetryDelayMs = 250;
+  private readonly maxRetryDelayMs = 1000;
+  private readonly quoteMaxAgeMs = 30_000;
 
   constructor(private api: GSwapAPI) {}
 
@@ -109,7 +111,9 @@ export class TradeExecutor {
       execution,
       opportunity.tokenClassA,
       opportunity.tokenClassB,
-      opportunity.maxTradeAmount
+      opportunity.maxTradeAmount,
+      opportunity.buyQuote,
+      opportunity.timestamp
     );
 
     if (!buySwap || !buySwap.transactionHash) {
@@ -128,7 +132,9 @@ export class TradeExecutor {
       execution,
       opportunity.tokenClassB,
       opportunity.tokenClassA,
-      buySwap.outputAmount // Use the output from the buy swap
+      buySwap.outputAmount, // Use the output from the buy swap
+      opportunity.sellQuote,
+      opportunity.timestamp
     );
 
     if (!sellSwap || !sellSwap.transactionHash) {
@@ -150,9 +156,13 @@ export class TradeExecutor {
     execution: TradeExecution,
     inputTokenClass: string,
     outputTokenClass: string,
-    inputAmount: number
+    inputAmount: number,
+    initialQuote?: SwapQuote,
+    quoteTimestamp?: number
   ): Promise<SwapResult> {
     let lastError: Error | null = null;
+    let cachedQuote: SwapQuote | undefined = initialQuote;
+    let cachedQuoteTimestamp: number | undefined = quoteTimestamp;
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       if (execution.status === 'cancelled') {
@@ -163,11 +173,23 @@ export class TradeExecutor {
         console.log(`   ${inputTokenClass} -> ${outputTokenClass}`);
         console.log(`   Amount: ${inputAmount}`);
 
+        if (!this.isQuoteUsable(cachedQuote, inputTokenClass, outputTokenClass, inputAmount)) {
+          cachedQuote = undefined;
+          cachedQuoteTimestamp = undefined;
+        }
+
+        if (cachedQuote && this.isQuoteStale(cachedQuoteTimestamp)) {
+          console.log('⚠️  Cached quote is stale, requesting fresh pricing');
+          cachedQuote = undefined;
+          cachedQuoteTimestamp = undefined;
+        }
+
         const result = await this.api.executeSwap(
           inputTokenClass,
           outputTokenClass,
           inputAmount,
-          config.slippageTolerance
+          config.slippageTolerance,
+          cachedQuote
         );
 
         if (!result) {
@@ -187,6 +209,11 @@ export class TradeExecutor {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Swap execution failed');
 
+        if (this.shouldInvalidateCachedQuote(lastError)) {
+          cachedQuote = undefined;
+          cachedQuoteTimestamp = undefined;
+        }
+
         if (this.isExecutionCancelled(execution)) {
           throw new Error('Trade execution cancelled');
         }
@@ -194,7 +221,7 @@ export class TradeExecutor {
         console.warn(`⚠️  Swap execution failed (attempt ${attempt}/${this.maxRetries}):`, lastError.message);
 
         if (attempt < this.maxRetries) {
-          const delay = this.retryDelay * attempt;
+          const delay = this.getAdaptiveRetryDelay(attempt);
           console.log(`⏳ Waiting ${delay}ms before retry...`);
           await this.delay(delay);
         }
@@ -210,6 +237,52 @@ export class TradeExecutor {
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private getAdaptiveRetryDelay(attempt: number): number {
+    const cappedBase = Math.min(this.baseRetryDelayMs * attempt, this.maxRetryDelayMs);
+    const jitter = Math.random() * this.baseRetryDelayMs;
+    return Math.round(cappedBase + jitter);
+  }
+
+  private isQuoteUsable(
+    quote: SwapQuote | undefined,
+    inputTokenClass: string,
+    outputTokenClass: string,
+    inputAmount: number
+  ): quote is SwapQuote {
+    if (!quote) {
+      return false;
+    }
+
+    const tokensMatch =
+      quote.inputToken === inputTokenClass && quote.outputToken === outputTokenClass;
+
+    if (!tokensMatch) {
+      return false;
+    }
+
+    const tolerance = Math.max(1e-8, Math.abs(inputAmount) * 1e-6);
+    const amountMatches = Math.abs(quote.inputAmount - inputAmount) <= tolerance;
+    return amountMatches && quote.outputAmount > 0;
+  }
+
+  private isQuoteStale(timestamp?: number): boolean {
+    if (!timestamp) {
+      return false;
+    }
+
+    return Date.now() - timestamp > this.quoteMaxAgeMs;
+  }
+
+  private shouldInvalidateCachedQuote(error: Error): boolean {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes('slippage') ||
+      message.includes('price impact') ||
+      message.includes('quote') ||
+      message.includes('tolerance')
+    );
   }
 
   private isExecutionCancelled(execution: TradeExecution): boolean {
