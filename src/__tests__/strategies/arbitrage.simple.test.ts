@@ -47,7 +47,7 @@ describe('ArbitrageDetector', () => {
       jest.spyOn(crossPairStrategy, 'detectOpportunities').mockResolvedValue(mockOpportunities);
       jest.spyOn(directStrategy, 'detectOpportunities').mockResolvedValue([]);
 
-      detector = new ArbitrageDetector();
+      detector = new ArbitrageDetector([crossPairStrategy, directStrategy]);
 
       const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi);
 
@@ -65,7 +65,7 @@ describe('ArbitrageDetector', () => {
       jest.spyOn(crossPairStrategy, 'detectOpportunities').mockResolvedValue([]);
       jest.spyOn(directStrategy, 'detectOpportunities').mockResolvedValue([]);
 
-      detector = new ArbitrageDetector();
+      detector = new ArbitrageDetector([crossPairStrategy, directStrategy]);
 
       const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi);
 
@@ -87,7 +87,7 @@ describe('ArbitrageDetector', () => {
       jest.spyOn(crossPairStrategy, 'detectOpportunitiesForSwap').mockResolvedValue(mockOpportunities);
       jest.spyOn(directStrategy, 'detectOpportunitiesForSwap').mockResolvedValue([]);
 
-      detector = new ArbitrageDetector();
+      detector = new ArbitrageDetector([crossPairStrategy, directStrategy]);
 
       const opportunities = await detector.detectOpportunitiesForSwap(swapData, currentPrice, mockApi);
 
