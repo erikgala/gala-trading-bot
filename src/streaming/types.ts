@@ -4,48 +4,105 @@
  */
 
 export interface BlockData {
-  // Placeholder - will be updated with real schema
-  blockNumber: number;
-  blockHash: string;
-  timestamp: number;
+  blockNumber: string;
+  channelName: string;
+  createdAt: string;
+  isConfigurationBlock: boolean;
+  header: {
+    number: string;
+    previous_hash: string;
+    data_hash: string;
+  };
   transactions: TransactionData[];
-  // Additional fields will be added based on real data
+  configtxs: any[];
 }
 
 export interface TransactionData {
-  // Placeholder - will be updated with real schema
-  hash: string;
-  from: string;
-  to: string;
-  value: string;
-  gasUsed: number;
-  gasPrice: string;
-  logs: LogData[];
-  // Additional fields will be added based on real data
+  id: string;
+  creator: {
+    mspId: string;
+    name: string;
+  };
+  type: string;
+  validationCode: {
+    transactionId: string;
+    validationCode: number;
+    validationEnum: string;
+  };
+  actions: ActionData[];
 }
 
-export interface LogData {
-  // Placeholder - will be updated with real schema
-  address: string;
-  topics: string[];
-  data: string;
-  // Additional fields will be added based on real data
+export interface ActionData {
+  chaincodeResponse: {
+    status: number;
+    message: string;
+    payload: string;
+  };
+  reads: Array<{
+    key: string;
+  }>;
+  writes: Array<{
+    key: string;
+    isDelete: boolean;
+    value: string;
+  }>;
+  endorserMsps: string[];
+  args: string[];
+  chaincode: {
+    name: string;
+    version: string;
+  };
+}
+
+export interface TokenInfo {
+  type: string;
+  category: string;
+  collection: string;
+  additionalKey: string;
+}
+
+export interface DexV3Operation {
+  dto: {
+    fee: number;
+    amount: string;
+    token0: TokenInfo;
+    token1: TokenInfo;
+    recipient: string;
+    signature: string;
+    uniqueKey: string;
+    zeroForOne: boolean;
+    sqrtPriceLimit: string;
+    amountInMaximum: string;
+  };
+  method: string;
+  uniqueId: string;
+}
+
+export interface DexV3BatchSubmit {
+  operations: DexV3Operation[];
+  uniqueKey: string;
+  signature: string;
+  trace: {
+    traceId: string;
+    spanId: string;
+  };
 }
 
 export interface SwapEvent {
-  // Placeholder - will be updated with real schema
-  blockNumber: number;
-  transactionHash: string;
-  timestamp: number;
-  dex: string;
-  tokenIn: string;
-  tokenOut: string;
-  amountIn: string;
-  amountOut: string;
-  priceImpact: number;
-  fee: string;
+  blockNumber: string;
+  transactionId: string;
+  timestamp: string;
+  channelName: string;
   user: string;
-  // Additional fields will be added based on real data
+  operation: DexV3Operation;
+  // Parsed from the operation
+  tokenIn: string; // token0 or token1 based on zeroForOne
+  tokenOut: string; // token1 or token0 based on zeroForOne
+  amountIn: string;
+  amountOut: string; // Calculated from price impact
+  fee: number;
+  priceImpact: number; // Calculated from sqrtPriceLimit
+  dex: string; // "GalaSwap" or derived from channel
 }
 
 export interface KafkaConfig {

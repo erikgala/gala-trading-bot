@@ -108,15 +108,28 @@ export class KafkaBlockConsumer {
    */
   private async processBlockMessage(data: any): Promise<void> {
     try {
-      // TODO: Parse actual block data structure once we have the real schema
+      // Early filter: Skip non-asset-channel blocks for efficiency
+      if (data.channelName && data.channelName !== 'asset-channel') {
+        console.log(`⏭️  Skipping non-asset-channel block from channel: ${data.channelName}`);
+        return;
+      }
+
+      // Parse the real block data structure
       const blockData: BlockData = {
-        blockNumber: data.blockNumber || 0,
-        blockHash: data.blockHash || '',
-        timestamp: data.timestamp || Date.now(),
+        blockNumber: data.blockNumber || '0',
+        channelName: data.channelName || '',
+        createdAt: data.createdAt || new Date().toISOString(),
+        isConfigurationBlock: data.isConfigurationBlock || false,
+        header: data.header || {
+          number: data.blockNumber || '0',
+          previous_hash: '',
+          data_hash: ''
+        },
         transactions: data.transactions || [],
+        configtxs: data.configtxs || [],
       };
 
-      console.log(`📦 Processing block ${blockData.blockNumber} with ${blockData.transactions.length} transactions`);
+      console.log(`📦 Processing asset-channel block ${blockData.blockNumber} with ${blockData.transactions.length} transactions`);
       
       await this.eventProcessor.processBlock(blockData);
 
@@ -137,17 +150,19 @@ export class KafkaBlockConsumer {
     try {
       // TODO: Parse actual swap data structure once we have the real schema
       const swapEvent: SwapEvent = {
-        blockNumber: data.blockNumber || 0,
-        transactionHash: data.transactionHash || '',
-        timestamp: data.timestamp || Date.now(),
-        dex: data.dex || 'unknown',
+        blockNumber: data.blockNumber || '0',
+        transactionId: data.transactionId || '',
+        timestamp: data.timestamp || new Date().toISOString(),
+        channelName: data.channelName || '',
+        user: data.user || '',
+        operation: data.operation || {} as any,
         tokenIn: data.tokenIn || '',
         tokenOut: data.tokenOut || '',
         amountIn: data.amountIn || '0',
         amountOut: data.amountOut || '0',
+        fee: data.fee || 0,
         priceImpact: data.priceImpact || 0,
-        fee: data.fee || '0',
-        user: data.user || '',
+        dex: data.dex || 'GalaSwap',
       };
 
       console.log(`🔄 Processing swap: ${swapEvent.tokenIn} -> ${swapEvent.tokenOut} (${swapEvent.amountIn})`);
@@ -164,50 +179,28 @@ export class KafkaBlockConsumer {
    */
   private async processTransactionMessage(data: any): Promise<void> {
     try {
-      // TODO: Parse actual transaction data structure once we have the real schema
+      // Parse the real transaction data structure
       const txData: TransactionData = {
-        hash: data.hash || '',
-        from: data.from || '',
-        to: data.to || '',
-        value: data.value || '0',
-        gasUsed: data.gasUsed || 0,
-        gasPrice: data.gasPrice || '0',
-        logs: data.logs || [],
+        id: data.id || '',
+        creator: data.creator || { mspId: '', name: '' },
+        type: data.type || '',
+        validationCode: data.validationCode || {
+          transactionId: '',
+          validationCode: 0,
+          validationEnum: 'UNKNOWN'
+        },
+        actions: data.actions || [],
       };
 
-      // Only process if it looks like a swap transaction
-      if (this.isSwapTransaction(txData)) {
-        console.log(`🔍 Analyzing swap transaction: ${txData.hash}`);
-        await this.eventProcessor.processTransaction(txData);
-      }
+      // Process all transactions (we'll filter for DexV3Contract:BatchSubmit in the processor)
+      console.log(`🔍 Analyzing transaction: ${txData.id}`);
+      await this.eventProcessor.processTransaction(txData);
 
     } catch (error) {
       console.error('❌ Error processing transaction message:', error);
     }
   }
 
-  /**
-   * Determine if a transaction is a swap
-   */
-  private isSwapTransaction(tx: TransactionData): boolean {
-    // TODO: Implement proper swap detection based on real data structure
-    // This is a placeholder that checks for common swap indicators
-    
-    // Check if transaction has logs (DEX interactions usually have events)
-    if (tx.logs.length === 0) return false;
-    
-    // Check if transaction is to a known DEX contract
-    const knownDexAddresses = [
-      // Placeholder - will be updated with real DEX addresses
-      '0x1234567890123456789012345678901234567890',
-      '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
-    ];
-    
-    return knownDexAddresses.some(addr => 
-      tx.to?.toLowerCase() === addr.toLowerCase() ||
-      tx.logs.some(log => log.address?.toLowerCase() === addr.toLowerCase())
-    );
-  }
 
   /**
    * Get consumer status

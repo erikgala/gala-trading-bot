@@ -91,6 +91,7 @@ class GalaStreamingBot {
     kafkaStatus: { isRunning: boolean; connected: boolean };
     processingStats: {
       blocksProcessed: number;
+      blocksFiltered: number;
       swapsProcessed: number;
       opportunitiesFound: number;
       tradesExecuted: number;
@@ -122,6 +123,7 @@ class GalaStreamingBot {
     console.log(`   Running: ${status.isRunning}`);
     console.log(`   Kafka Connected: ${status.kafkaStatus.connected}`);
     console.log(`   Blocks Processed: ${status.processingStats.blocksProcessed}`);
+    console.log(`   Blocks Filtered: ${status.processingStats.blocksFiltered}`);
     console.log(`   Swaps Processed: ${status.processingStats.swapsProcessed}`);
     console.log(`   Opportunities Found: ${status.processingStats.opportunitiesFound}`);
     console.log(`   Trades Executed: ${status.tradingStats.totalTrades}`);

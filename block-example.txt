@@ -1,0 +1,95 @@
+{
+  "blockNumber": "8658584",
+  "channelName": "asset-channel",
+  "createdAt": "2025-09-19T01:27:19.053Z",
+  "isConfigurationBlock": false,
+  "header": {
+    "number": "8658584",
+    "previous_hash": "7da67d21603ec70c2cecc9f1b3cac370636c3fe654d339736040a2738797f17e",
+    "data_hash": "5152969b9109c58eb8939a96b104f26b25a84644e4ced028930fcc4925477c56"
+  },
+  "transactions": [
+    {
+      "id": "a18cfe4ef5f7d1b0017be436c32ab8ff2ed39587b6b95686fb761ca8a03c08cf",
+      "creator": {
+        "mspId": "GalaUsersOrg",
+        "name": "Client|galausers"
+      },
+      "type": "ENDORSER_TRANSACTION",
+      "validationCode": {
+        "transactionId": "a18cfe4ef5f7d1b0017be436c32ab8ff2ed39587b6b95686fb761ca8a03c08cf",
+        "validationCode": 0,
+        "validationEnum": "VALID"
+      },
+      "actions": [
+        {
+          "chaincodeResponse": {
+            "status": 200,
+            "message": "",
+            "payload": "{\"Data\":[{\"ErrorCode\":402,\"ErrorKey\":\"PAYMENT_REQUIRED\",\"ErrorPayload\":{\"paymentQuantity\":\"1\"},\"Message\":\"Failed to burnTokens fee: Insufficient balance\",\"Status\":0}],\"Status\":1}"
+          },
+          "reads": [
+            {
+              "key": "namespaces/fields/basic-asset/Sequence"
+            },
+            {
+              "key": "GCBSA"
+            },
+            {
+              "key": "GCFE/eth|74b7121cc26a35A37b041501b13734cBACdF39fA"
+            },
+            {
+              "key": "GCFP/galachain"
+            },
+            {
+              "key": "GCFS/Swap"
+            },
+            {
+              "key": "GCFTU/Swap/eth|74b7121cc26a35A37b041501b13734cBACdF39fA"
+            },
+            {
+              "key": "GCTB/eth|74b7121cc26a35A37b041501b13734cBACdF39fA/GALA/Unit/none/none"
+            },
+            {
+              "key": "GCTI/GALA/Unit/none/none"
+            },
+            {
+              "key": "GCTI2/GALA/Unit/none/none/0"
+            },
+            {
+              "key": "GCUP/74b7121cc26a35A37b041501b13734cBACdF39fA"
+            },
+            {
+              "key": "GCUP/9D985c2F9E17C0b3E66d8bD71639F052E7cC2397"
+            },
+            {
+              "key": "UNTX/aca0a716-ffb0-43fb-93d2-bef711ea091d"
+            },
+            {
+              "key": "UNTX/galaswap - operation - 5d54aa29-325a-4a0a-ab88-78d28f866d98"
+            }
+          ],
+          "writes": [
+            {
+              "key": "UNTX/aca0a716-ffb0-43fb-93d2-bef711ea091d",
+              "isDelete": false,
+              "value": "{\"created\":1758245239053,\"transactionId\":\"a18cfe4ef5f7d1b0017be436c32ab8ff2ed39587b6b95686fb761ca8a03c08cf\",\"uniqueKey\":\"aca0a716-ffb0-43fb-93d2-bef711ea091d\"}"
+            }
+          ],
+          "endorserMsps": [
+            "CuratorOrg"
+          ],
+          "args": [
+            "DexV3Contract:BatchSubmit",
+            "{\"operations\":[{\"dto\":{\"fee\":10000,\"amount\":\"1534.083473\",\"token0\":{\"type\":\"none\",\"category\":\"Unit\",\"collection\":\"$GMUSIC\",\"additionalKey\":\"none\"},\"token1\":{\"type\":\"none\",\"category\":\"Unit\",\"collection\":\"FILM\",\"additionalKey\":\"none\"},\"recipient\":\"eth|74b7121cc26a35A37b041501b13734cBACdF39fA\",\"signature\":\"c07e4f176eb80a9a88b362ba315951686d8498071a9e9e8d614c4517995dd346009fb9b1f0f6950601a7d523e7499e03072a55843f8fc7f98f2084272c081d5c1c\",\"uniqueKey\":\"galaswap - operation - 5d54aa29-325a-4a0a-ab88-78d28f866d98\",\"zeroForOne\":false,\"sqrtPriceLimit\":\"18446050999999999999\",\"amountInMaximum\":\"1534.083473\"},\"method\":\"Swap\",\"uniqueId\":\"9a50904d-50e0-461c-84c8-61dbd35c22de\"}],\"uniqueKey\":\"aca0a716-ffb0-43fb-93d2-bef711ea091d\",\"signature\":\"d26f5e168644fc51978abe4f3e0be4b11e4ef365efef49c08ff61373b8f03a741e12c97b53077d5a3778bd82fc679f41f4381ee57851b429f2fb03de2bcf12f71b\",\"trace\":{\"traceId\":\"4492033034997512612\",\"spanId\":\"5246577683754896883\"}}"
+          ],
+          "chaincode": {
+            "name": "basic-asset",
+            "version": "50527314"
+          }
+        }
+      ]
+    }
+  ],
+  "configtxs": []
+}
