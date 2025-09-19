@@ -58,21 +58,6 @@ jest.mock('../../strategies/arbitrage', () => ({
   }))
 }));
 
-// Mock the mock trade executor
-jest.mock('../../mock/mockTradeExecutor', () => ({
-  MockTradeExecutor: jest.fn().mockImplementation(() => ({
-    executeArbitrageTrade: jest.fn().mockResolvedValue(true),
-    getStats: jest.fn().mockReturnValue({
-      totalTransactions: 1,
-      arbitrageTrades: 1,
-      swapTrades: 0,
-      totalProfit: 25,
-      successRate: 100
-    }),
-    generateFinalReport: jest.fn()
-  }))
-}));
-
 describe('Kafka Consumer Integration Tests', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let eventProcessor: RealTimeEventProcessor;

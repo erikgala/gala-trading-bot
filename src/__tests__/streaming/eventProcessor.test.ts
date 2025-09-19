@@ -14,21 +14,6 @@ jest.mock('../../strategies/arbitrage', () => ({
   }))
 }));
 
-// Mock the mock trade executor
-jest.mock('../../mock/mockTradeExecutor', () => ({
-  MockTradeExecutor: jest.fn().mockImplementation(() => ({
-    executeArbitrageTrade: jest.fn().mockResolvedValue(true),
-    getStats: jest.fn().mockReturnValue({
-      totalTransactions: 0,
-      arbitrageTrades: 0,
-      swapTrades: 0,
-      totalProfit: 0,
-      successRate: 100
-    }),
-    generateFinalReport: jest.fn()
-  }))
-}));
-
 describe('RealTimeEventProcessor', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let eventProcessor: RealTimeEventProcessor;

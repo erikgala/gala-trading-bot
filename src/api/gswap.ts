@@ -111,12 +111,19 @@ export class GSwapAPI {
   private tokensLoaded: boolean = false;
   private latestQuoteMap: QuoteMap = new Map();
   private balanceSnapshot: BalanceSnapshot | null = null;
+  private readonly isMockMode: boolean;
+  private mockBalances: Map<string, number> | null = null;
 
   constructor() {
     this.signer = new PrivateKeySigner(config.privateKey);
     this.gSwap = new GSwap({
       signer: this.signer,
     });
+    this.isMockMode = config.mockMode;
+
+    if (this.isMockMode) {
+      this.initializeMockBalances();
+    }
   }
 
   /**
@@ -327,22 +334,75 @@ export class GSwapAPI {
     return Date.now() - snapshot.fetchedAt >= config.balanceRefreshInterval;
   }
 
-  private buildSnapshotFromMockBalances(): BalanceSnapshot {
-    const balances = new Map<string, number>();
+  private initializeMockBalances(): void {
+    this.mockBalances = new Map<string, number>();
 
     for (const [tokenClass, quantity] of Object.entries(config.mockWalletBalances)) {
+      this.mockBalances.set(tokenClass, quantity);
+    }
+  }
+
+  private getMockBalances(): Map<string, number> {
+    if (!this.mockBalances) {
+      this.initializeMockBalances();
+    }
+
+    return this.mockBalances!;
+  }
+
+  private buildSnapshotFromMockBalances(): BalanceSnapshot {
+    const balances = new Map<string, number>();
+    const mockBalances = this.getMockBalances();
+
+    for (const [tokenClass, quantity] of mockBalances.entries()) {
       balances.set(tokenClass, quantity);
     }
 
     return new BalanceSnapshot(balances, Date.now());
   }
 
-  private async buildBalanceSnapshot(): Promise<BalanceSnapshot> {
-    if (config.mockMode) {
-      return this.buildSnapshotFromMockBalances();
+  private buildMockAssetsResponse(): UserAssetsResponse {
+    const tokens: UserAssetToken[] = [];
+
+    for (const [tokenClass, quantity] of this.getMockBalances().entries()) {
+      const [collection = '', category = '', type = '', additionalKey = ''] = tokenClass.split('|');
+
+      tokens.push({
+        symbol: collection,
+        quantity: quantity.toString(),
+        collection,
+        category,
+        type,
+        additionalKey,
+      });
     }
 
-    const userAssets = await this.gSwap.assets.getUserAssets(config.walletAddress, 1, 100) as UserAssetsResponse;
+    return { tokens };
+  }
+
+  private applyMockSwap(
+    inputTokenClass: string,
+    outputTokenClass: string,
+    inputAmount: number,
+    outputAmount: number
+  ): void {
+    const balances = this.getMockBalances();
+    const currentInput = balances.get(inputTokenClass) ?? 0;
+
+    if (currentInput < inputAmount) {
+      throw new Error(`Insufficient mock balance for ${inputTokenClass}`);
+    }
+
+    balances.set(inputTokenClass, currentInput - inputAmount);
+
+    const currentOutput = balances.get(outputTokenClass) ?? 0;
+    balances.set(outputTokenClass, currentOutput + outputAmount);
+
+    this.balanceSnapshot = this.buildSnapshotFromMockBalances();
+  }
+
+  private async buildBalanceSnapshot(): Promise<BalanceSnapshot> {
+    const userAssets = await this.fetchUserAssets();
     const balances = new Map<string, number>();
 
     const tokens = userAssets?.tokens ?? [];
@@ -369,7 +429,9 @@ export class GSwapAPI {
     }
 
     try {
-      const snapshot = await this.buildBalanceSnapshot();
+      const snapshot = this.isMockMode
+        ? this.buildSnapshotFromMockBalances()
+        : await this.buildBalanceSnapshot();
       this.balanceSnapshot = snapshot;
       return snapshot;
     } catch (error) {
@@ -379,7 +441,7 @@ export class GSwapAPI {
         return this.balanceSnapshot;
       }
 
-      const emptySnapshot = config.mockMode
+      const emptySnapshot = this.isMockMode
         ? this.buildSnapshotFromMockBalances()
         : new BalanceSnapshot(new Map(), Date.now());
 
@@ -458,6 +520,19 @@ export class GSwapAPI {
       // Convert fee tier to proper format (0.3% = 3000)
       const feeTier = Math.floor(quote.feeTier * 10000);
 
+      if (this.isMockMode) {
+        this.applyMockSwap(inputTokenClass, outputTokenClass, inputAmount, quote.outputAmount);
+
+        return {
+          transactionHash: `mock_tx_${Date.now()}`,
+          inputAmount: inputAmount,
+          outputAmount: quote.outputAmount,
+          actualPrice: quote.outputAmount / inputAmount,
+          gasUsed: 0,
+          timestamp: Date.now()
+        };
+      }
+
       const transaction = await this.gSwap.swaps.swap(
         inputTokenClass,
         outputTokenClass,
@@ -480,6 +555,14 @@ export class GSwapAPI {
       console.error('Failed to execute swap:', error);
       throw error;
     }
+  }
+
+  private async fetchUserAssets(): Promise<UserAssetsResponse> {
+    if (this.isMockMode) {
+      return this.buildMockAssetsResponse();
+    }
+
+    return await this.gSwap.assets.getUserAssets(config.walletAddress, 1, 100) as UserAssetsResponse;
   }
 
   private isQuoteValidForSwap(
