@@ -1,4 +1,4 @@
-import { GSwapAPI, TradingPair, SwapQuote, TokenInfo, QuoteMap, buildQuoteCacheKey } from '../api/gswap';
+import { GSwapAPI, TradingPair, SwapQuote, TokenInfo, QuoteMap, buildQuoteCacheKey, BalanceSnapshot } from '../api/gswap';
 import { config } from '../config';
 
 const QUOTE_CACHE_TTL_MS = 30_000;
@@ -84,9 +84,13 @@ export interface ArbitrageStrategy {
   detectOpportunities?(pairs: TradingPair[], api: GSwapAPI, quoteMap: QuoteMap): Promise<ArbitrageOpportunity[]>;
 }
 
+export type ArbitrageStrategyConstructor = new (balanceSnapshot: BalanceSnapshot) => ArbitrageStrategy;
+
 export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
   name = 'Cross-Pair Arbitrage';
   description = 'Detects arbitrage opportunities between different trading pairs for the same token';
+
+  constructor(private readonly balanceSnapshot: BalanceSnapshot) {}
 
   async detectOpportunitiesForSwap(
     swapData: SwapData,
@@ -276,7 +280,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
       if (profitPercentage < config.minProfitThreshold) return null;
       
       // Check if we have sufficient funds
-      const fundsCheck = await api.checkTradingFunds(config.maxTradeAmount, token1ClassKey);
+      const fundsCheck = await api.checkTradingFunds(config.maxTradeAmount, token1ClassKey, this.balanceSnapshot);
       
       return {
         id: `triangular-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -412,7 +416,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
       const estimatedProfit = (sellRate - buyRate) * maxTradeAmount;
 
       // Check if we have sufficient funds for trading
-      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, buyPair.tokenClassA);
+      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, buyPair.tokenClassA, this.balanceSnapshot);
 
       return {
         id: `arb-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -442,6 +446,8 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
 export class DirectArbitrageStrategy implements ArbitrageStrategy {
   name = 'Direct Arbitrage';
   description = 'Detects arbitrage opportunities within the same trading pair (bid-ask spread)';
+
+  constructor(private readonly balanceSnapshot: BalanceSnapshot) {}
 
   async detectOpportunitiesForSwap(
     swapData: SwapData,
@@ -544,7 +550,7 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       if (maxTradeAmount <= 0) return null;
 
       // Check if we have sufficient funds for trading
-      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenInClassKey);
+      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenInClassKey, this.balanceSnapshot);
 
       return {
         id: `direct-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -605,7 +611,7 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       if (maxTradeAmount <= 0) return null;
 
       // Check if we have sufficient funds for trading
-      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, pair.tokenClassA);
+      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, pair.tokenClassA, this.balanceSnapshot);
 
       return {
         id: `direct-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -633,13 +639,17 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
 }
 
 export class ArbitrageDetector {
-  private strategies: ArbitrageStrategy[];
+  private readonly strategyConstructors: ArbitrageStrategyConstructor[];
 
-  constructor(strategies?: ArbitrageStrategy[]) {
-    this.strategies = strategies ?? [
-      new CrossPairArbitrageStrategy(),
-      new DirectArbitrageStrategy(),
+  constructor(strategyConstructors?: ArbitrageStrategyConstructor[]) {
+    this.strategyConstructors = strategyConstructors ?? [
+      CrossPairArbitrageStrategy,
+      DirectArbitrageStrategy,
     ];
+  }
+
+  private instantiateStrategies(balanceSnapshot: BalanceSnapshot): ArbitrageStrategy[] {
+    return this.strategyConstructors.map(StrategyCtor => new StrategyCtor(balanceSnapshot));
   }
 
   async detectOpportunitiesForSwap(
@@ -648,8 +658,11 @@ export class ArbitrageDetector {
     api: GSwapAPI
   ): Promise<ArbitrageOpportunity[]> {
     const allOpportunities: ArbitrageOpportunity[] = [];
-    
-    for (const strategy of this.strategies) {
+
+    const balanceSnapshot = await api.getBalanceSnapshot();
+    const strategies = this.instantiateStrategies(balanceSnapshot);
+
+    for (const strategy of strategies) {
       try {
         console.log(`🔍 Running ${strategy.name}...`);
         const opportunities = await strategy.detectOpportunitiesForSwap(swapData, currentPrice, api);
@@ -673,7 +686,10 @@ export class ArbitrageDetector {
   ): Promise<ArbitrageOpportunity[]> {
     const allOpportunities: ArbitrageOpportunity[] = [];
 
-    for (const strategy of this.strategies) {
+    const balanceSnapshot = await api.getBalanceSnapshot();
+    const strategies = this.instantiateStrategies(balanceSnapshot);
+
+    for (const strategy of strategies) {
       try {
         console.log(`🔍 Running ${strategy.name}...`);
         const opportunities = strategy.detectOpportunities ? await strategy.detectOpportunities(pairs, api, quoteMap) : [];

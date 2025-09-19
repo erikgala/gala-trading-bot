@@ -1,10 +1,15 @@
-import { 
-  ArbitrageDetector, 
-  CrossPairArbitrageStrategy, 
+import {
+  ArbitrageDetector,
+  CrossPairArbitrageStrategy,
   DirectArbitrageStrategy,
   ArbitrageOpportunity
 } from '../../strategies/arbitrage';
 import { GSwapAPI, TradingPair, TokenInfo, SwapQuote } from '../../api/gswap';
+import type { BalanceSnapshot } from '../../api/gswap';
+
+const { BalanceSnapshot: RealBalanceSnapshot } = jest.requireActual<
+  typeof import('../../api/gswap')
+>('../../api/gswap');
 import { 
   createMockTokenInfo, 
   createMockTradingPair, 
@@ -17,12 +22,25 @@ import {
 jest.mock('../../api/gswap');
 const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 
+const createMockBalanceSnapshot = (balance = 10000): BalanceSnapshot => {
+  const balances = new Map<string, number>([['GALA|Unit|none|none', balance]]);
+  return new RealBalanceSnapshot(balances, Date.now());
+};
+
 describe('ArbitrageDetector', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let detector: ArbitrageDetector;
+  let balanceSnapshot: BalanceSnapshot;
 
   beforeEach(() => {
     mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
+    balanceSnapshot = createMockBalanceSnapshot();
+    mockApi.getBalanceSnapshot.mockResolvedValue(balanceSnapshot);
+    mockApi.checkTradingFunds.mockResolvedValue({
+      hasFunds: true,
+      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
+      shortfall: 0,
+    });
     detector = new ArbitrageDetector();
   });
 
@@ -65,10 +83,17 @@ describe('ArbitrageDetector', () => {
 describe('CrossPairArbitrageStrategy', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let strategy: CrossPairArbitrageStrategy;
+  let balanceSnapshot: BalanceSnapshot;
 
   beforeEach(() => {
     mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    strategy = new CrossPairArbitrageStrategy();
+    balanceSnapshot = createMockBalanceSnapshot();
+    strategy = new CrossPairArbitrageStrategy(balanceSnapshot);
+    mockApi.checkTradingFunds.mockResolvedValue({
+      hasFunds: true,
+      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
+      shortfall: 0,
+    });
   });
 
   afterEach(() => {
@@ -120,10 +145,17 @@ describe('CrossPairArbitrageStrategy', () => {
 describe('DirectArbitrageStrategy', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let strategy: DirectArbitrageStrategy;
+  let balanceSnapshot: BalanceSnapshot;
 
   beforeEach(() => {
     mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    strategy = new DirectArbitrageStrategy();
+    balanceSnapshot = createMockBalanceSnapshot();
+    strategy = new DirectArbitrageStrategy(balanceSnapshot);
+    mockApi.checkTradingFunds.mockResolvedValue({
+      hasFunds: true,
+      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
+      shortfall: 0,
+    });
   });
 
   afterEach(() => {

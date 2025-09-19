@@ -13,6 +13,7 @@ export interface BotConfig {
   maxTradeAmount: number; // Maximum amount to trade per opportunity
   pollingInterval: number; // Polling interval in milliseconds
   slippageTolerance: number; // Slippage tolerance percentage (e.g., 5 for 5%)
+  balanceRefreshInterval: number; // How often to refresh cached wallet balances
   
   // Risk Management
   maxConcurrentTrades: number;
@@ -38,6 +39,7 @@ export const config: BotConfig = {
   maxTradeAmount: parseFloat(process.env.MAX_TRADE_AMOUNT || '1000'),
   pollingInterval: parseInt(process.env.POLLING_INTERVAL || '5000'), // 5 seconds
   slippageTolerance: parseFloat(process.env.SLIPPAGE_TOLERANCE || '5.0'), // 5%
+  balanceRefreshInterval: parseInt(process.env.BALANCE_REFRESH_INTERVAL || '0'), // 0 = disabled
   
   maxConcurrentTrades: parseInt(process.env.MAX_CONCURRENT_TRADES || '3'),
   stopLossPercentage: parseFloat(process.env.STOP_LOSS_PERCENTAGE || '5.0'), // 5%
@@ -76,5 +78,9 @@ export function validateConfig(): void {
   
   if (config.slippageTolerance <= 0 || config.slippageTolerance > 100) {
     throw new Error('SLIPPAGE_TOLERANCE must be between 0 and 100');
+  }
+
+  if (config.balanceRefreshInterval < 0) {
+    throw new Error('BALANCE_REFRESH_INTERVAL must be 0 or greater');
   }
 }
