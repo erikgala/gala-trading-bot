@@ -73,50 +73,6 @@ export class MockTradeExecutor {
   }
 
   /**
-   * Execute a mock regular swap
-   */
-  async executeSwap(
-    tokenIn: string,
-    tokenOut: string,
-    amountIn: number,
-    amountOut: number,
-    price: number
-  ): Promise<boolean> {
-    if (!this.isEnabled || !this.mockWallet || !this.csvLogger) {
-      return false;
-    }
-
-    try {
-      // Check if we have sufficient balance
-      if (!this.mockWallet.hasSufficientBalance(tokenIn, amountIn)) {
-        console.log(`❌ Insufficient balance for swap`);
-        console.log(`   Required: ${amountIn} ${tokenIn}`);
-        console.log(`   Available: ${this.mockWallet.getBalance(tokenIn)} ${tokenIn}`);
-        return false;
-      }
-
-      // Execute the mock swap
-      const transaction = this.mockWallet.executeSwap(
-        tokenIn,
-        tokenOut,
-        amountIn,
-        amountOut,
-        price,
-        'swap'
-      );
-
-      // Log to CSV
-      this.csvLogger.logTransaction(transaction);
-
-      return true;
-
-    } catch (error) {
-      console.error('❌ Error executing mock swap:', error);
-      return false;
-    }
-  }
-
-  /**
    * Get current wallet balances
    */
   getBalances(): Record<string, number> {
@@ -134,16 +90,6 @@ export class MockTradeExecutor {
       return 0;
     }
     return this.mockWallet.getBalance(tokenClass);
-  }
-
-  /**
-   * Check if wallet has sufficient funds
-   */
-  hasSufficientFunds(amount: number, tokenClass: string): boolean {
-    if (!this.isEnabled || !this.mockWallet) {
-      return false;
-    }
-    return this.mockWallet.hasSufficientBalance(tokenClass, amount);
   }
 
   /**

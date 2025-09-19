@@ -55,7 +55,7 @@ export class RealTimeEventProcessor implements EventProcessor {
     try {
       // Process each action for DexV3Contract:BatchSubmit
       for (const action of txData.actions) {
-        await this.processAction(action, txData);
+        await this.processAction(action);
       }
 
     } catch (error) {
@@ -66,7 +66,7 @@ export class RealTimeEventProcessor implements EventProcessor {
   /**
    * Process individual actions within transactions
    */
-  private async processAction(action: ActionData, transaction: TransactionData): Promise<void> {
+  private async processAction(action: ActionData): Promise<void> {
     try {
       // Check if this is a DexV3Contract:BatchSubmit operation
       if (action.args.length >= 2 && action.args[0] === 'DexV3Contract:BatchSubmit') {
@@ -76,7 +76,7 @@ export class RealTimeEventProcessor implements EventProcessor {
         // Process each swap operation
         for (const operation of batchSubmit.operations) {
           if (operation.method === 'Swap') {
-            await this.processSwapOperation(operation, transaction);
+            await this.processSwapOperation(operation);
           }
         }
       }
@@ -89,7 +89,7 @@ export class RealTimeEventProcessor implements EventProcessor {
   /**
    * Process individual swap operations
    */
-  private async processSwapOperation(operation: any, transaction: TransactionData): Promise<void> {
+  private async processSwapOperation(operation: any): Promise<void> {
     try {
       // Extract swap details
       const swapData = {

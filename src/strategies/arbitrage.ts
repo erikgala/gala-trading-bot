@@ -635,8 +635,8 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
 export class ArbitrageDetector {
   private strategies: ArbitrageStrategy[];
 
-  constructor() {
-    this.strategies = [
+  constructor(strategies?: ArbitrageStrategy[]) {
+    this.strategies = strategies ?? [
       new CrossPairArbitrageStrategy(),
       new DirectArbitrageStrategy(),
     ];
