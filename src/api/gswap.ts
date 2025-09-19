@@ -429,11 +429,18 @@ export class GSwapAPI {
     inputTokenClass: string,
     outputTokenClass: string,
     inputAmount: number,
-    slippageTolerance: number = config.slippageTolerance
+    slippageTolerance: number = config.slippageTolerance,
+    providedQuote?: SwapQuote
   ): Promise<SwapResult> {
     try {
-      // Get quote first
-      const quote = await this.getQuote(inputTokenClass, outputTokenClass, inputAmount);
+      let quote = this.isQuoteValidForSwap(providedQuote, inputTokenClass, outputTokenClass, inputAmount)
+        ? providedQuote
+        : undefined;
+
+      if (!quote) {
+        quote = await this.getQuote(inputTokenClass, outputTokenClass, inputAmount);
+      }
+
       if (!quote) {
         throw new Error('Unable to get quote for swap');
       }
@@ -472,6 +479,28 @@ export class GSwapAPI {
       console.error('Failed to execute swap:', error);
       throw error;
     }
+  }
+
+  private isQuoteValidForSwap(
+    quote: SwapQuote | undefined,
+    inputTokenClass: string,
+    outputTokenClass: string,
+    inputAmount: number
+  ): quote is SwapQuote {
+    if (!quote) {
+      return false;
+    }
+
+    const tokensMatch =
+      quote.inputToken === inputTokenClass && quote.outputToken === outputTokenClass;
+    if (!tokensMatch) {
+      return false;
+    }
+
+    const tolerance = Math.max(1e-8, Math.abs(inputAmount) * 1e-6);
+    const amountMatches = Math.abs(quote.inputAmount - inputAmount) <= tolerance;
+
+    return amountMatches && quote.outputAmount > 0;
   }
 
   /**

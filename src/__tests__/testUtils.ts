@@ -27,13 +27,17 @@ export const createMockSwapQuote = (inputAmount: number, outputAmount: number): 
   route: ['GALA|Unit|none|none', 'GUSDC|Unit|none|none']
 });
 
-export const createMockSwapResult = (transactionHash: string): SwapResult => ({
+export const createMockSwapResult = (
+  transactionHash: string,
+  overrides: Partial<SwapResult> = {}
+): SwapResult => ({
   transactionHash,
   inputAmount: 1000,
   outputAmount: 25000,
   actualPrice: 0.04,
   gasUsed: 100000,
-  timestamp: Date.now()
+  timestamp: Date.now(),
+  ...overrides
 });
 
 export const createMockArbitrageOpportunity = (): ArbitrageOpportunity => ({

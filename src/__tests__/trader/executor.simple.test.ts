@@ -115,6 +115,32 @@ describe('TradeExecutor', () => {
       expect(execution.sellSwap).toBeDefined();
       expect(execution.status).toBe('completed');
     }, 10000);
+
+    it('should pass cached quotes to the swap executor when available', async () => {
+      const opportunity = createMockArbitrageOpportunity();
+      const buySwapResult = createMockSwapResult('0xaaa', {
+        inputAmount: opportunity.maxTradeAmount,
+        outputAmount: opportunity.buyQuote.outputAmount,
+        actualPrice: opportunity.buyQuote.outputAmount / opportunity.maxTradeAmount
+      });
+      const sellSwapResult = createMockSwapResult('0xbbb', {
+        inputAmount: opportunity.sellQuote.inputAmount,
+        outputAmount: opportunity.sellQuote.outputAmount,
+        actualPrice: opportunity.sellQuote.outputAmount / opportunity.sellQuote.inputAmount
+      });
+
+      mockApi.executeSwap
+        .mockResolvedValueOnce(buySwapResult)
+        .mockResolvedValueOnce(sellSwapResult);
+
+      await executor.executeArbitrage(opportunity);
+
+      const buyCall = mockApi.executeSwap.mock.calls[0];
+      const sellCall = mockApi.executeSwap.mock.calls[1];
+
+      expect(buyCall[4]).toEqual(opportunity.buyQuote);
+      expect(sellCall[4]).toEqual(opportunity.sellQuote);
+    }, 10000);
   });
 
   describe('cancelTradeExecution', () => {
