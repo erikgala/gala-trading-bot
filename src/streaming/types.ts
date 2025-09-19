@@ -49,20 +49,16 @@ export interface SwapEvent {
 }
 
 export interface KafkaConfig {
-  brokers: string[];
-  clientId: string;
-  groupId: string;
-  topics: {
-    blocks: string;
-    swaps: string;
-  };
+  apiUrl: string;
+  apiKey: string;
+  apiSecret: string;
+  schemaHost: string;
+  schemaUsername: string;
+  schemaPassword: string;
+  topic: string;
   // Additional Kafka configuration
-  ssl?: boolean;
-  sasl?: {
-    mechanism: string;
-    username: string;
-    password: string;
-  };
+  clientId?: string;
+  groupId?: string;
 }
 
 export interface EventProcessor {

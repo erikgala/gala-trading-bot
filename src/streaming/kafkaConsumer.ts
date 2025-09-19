@@ -6,21 +6,28 @@ export class KafkaBlockConsumer {
   private consumer: Consumer;
   private eventProcessor: EventProcessor;
   private isRunning: boolean = false;
+  private topic: string;
 
   constructor(config: KafkaConfig, eventProcessor: EventProcessor) {
+    // Parse the API URL to extract brokers
+    const brokers = this.parseBrokersFromUrl(config.apiUrl);
+    
     this.kafka = new Kafka({
-      clientId: config.clientId,
-      brokers: config.brokers,
-      ssl: config.ssl,
-      sasl: config.sasl ? {
-        mechanism: config.sasl.mechanism as any,
-        username: config.sasl.username,
-        password: config.sasl.password,
-      } : undefined,
+      clientId: config.clientId || 'gala-trading-bot',
+      brokers: brokers,
+      ssl: true, // Assume SSL for production Kafka
+      sasl: {
+        mechanism: 'plain',
+        username: config.apiKey,
+        password: config.apiSecret,
+      },
     });
 
-    this.consumer = this.kafka.consumer({ groupId: config.groupId });
+    this.consumer = this.kafka.consumer({ 
+      groupId: config.groupId || 'gala-trading-group' 
+    });
     this.eventProcessor = eventProcessor;
+    this.topic = config.topic;
   }
 
   /**
@@ -33,15 +40,9 @@ export class KafkaBlockConsumer {
       await this.consumer.connect();
       console.log('✅ Connected to Kafka');
 
-      // Subscribe to block data topic
+      // Subscribe to the configured topic
       await this.consumer.subscribe({ 
-        topic: 'blocks', // Placeholder topic name
-        fromBeginning: false 
-      });
-
-      // Subscribe to swap events topic (if separate)
-      await this.consumer.subscribe({ 
-        topic: 'swaps', // Placeholder topic name
+        topic: this.topic,
         fromBeginning: false 
       });
 
@@ -93,16 +94,9 @@ export class KafkaBlockConsumer {
 
       const messageData = JSON.parse(message.value.toString());
       
-      switch (topic) {
-        case 'blocks':
-          await this.processBlockMessage(messageData);
-          break;
-        case 'swaps':
-          await this.processSwapMessage(messageData);
-          break;
-        default:
-          console.warn(`⚠️  Unknown topic: ${topic}`);
-      }
+      // Process all messages as block data for now
+      // TODO: Update based on actual message structure
+      await this.processBlockMessage(messageData);
 
     } catch (error) {
       console.error('❌ Error processing Kafka message:', error);
@@ -223,6 +217,21 @@ export class KafkaBlockConsumer {
       isRunning: this.isRunning,
       connected: this.consumer ? true : false, // Simplified check
     };
+  }
+
+  /**
+   * Parse broker URLs from API URL
+   */
+  private parseBrokersFromUrl(apiUrl: string): string[] {
+    try {
+      const url = new URL(apiUrl);
+      // Extract host and port from the URL
+      const broker = `${url.hostname}:${url.port || '9092'}`;
+      return [broker];
+    } catch (error) {
+      console.warn('⚠️  Failed to parse broker URL, using default');
+      return ['localhost:9092'];
+    }
   }
 
   /**

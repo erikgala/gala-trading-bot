@@ -40,15 +40,13 @@ Add these variables to your `.env` file:
 
 ```bash
 # Kafka Configuration
-KAFKA_BROKERS=localhost:9092
-KAFKA_CLIENT_ID=gala-trading-bot
-KAFKA_GROUP_ID=gala-trading-group
-KAFKA_BLOCKS_TOPIC=blocks
-KAFKA_SWAPS_TOPIC=swaps
-KAFKA_SSL=false
-KAFKA_USERNAME=
-KAFKA_PASSWORD=
-KAFKA_SASL_MECHANISM=plain
+KAFKA_API_URL=your_kafka_api_url_here
+KAFKA_API_KEY=your_kafka_api_key_here
+KAFKA_API_SECRET=your_kafka_api_secret_here
+KAFKA_SCHEMA_HOST=your_schema_host_here
+KAFKA_SCHEMA_USERNAME=your_schema_username_here
+KAFKA_SCHEMA_PASSWORD=your_schema_password_here
+KAFKA_TOPIC=your_kafka_topic_here
 ```
 
 ### Running the Streaming Bot
