@@ -60,6 +60,33 @@ export interface QuoteCacheEntry {
 
 export type QuoteMap = Map<string, QuoteCacheEntry>;
 
+interface UserAssetToken {
+  symbol: string;
+  quantity: string;
+  collection?: string;
+  category?: string;
+  type?: string;
+  additionalKey?: string;
+}
+
+interface UserAssetsResponse {
+  tokens?: UserAssetToken[];
+}
+
+export class BalanceSnapshot {
+  private readonly balances: Map<string, number>;
+  readonly fetchedAt: number;
+
+  constructor(balances: Map<string, number>, fetchedAt: number) {
+    this.balances = balances;
+    this.fetchedAt = fetchedAt;
+  }
+
+  getBalance(tokenClass: string): number {
+    return this.balances.get(tokenClass) ?? 0;
+  }
+}
+
 export function buildQuoteCacheKey(
   inputTokenClass: string,
   outputTokenClass: string,
@@ -83,6 +110,7 @@ export class GSwapAPI {
   private availableTokens: TokenInfo[] = [];
   private tokensLoaded: boolean = false;
   private latestQuoteMap: QuoteMap = new Map();
+  private balanceSnapshot: BalanceSnapshot | null = null;
 
   constructor() {
     this.signer = new PrivateKeySigner(config.privateKey);
@@ -291,6 +319,79 @@ export class GSwapAPI {
     return new Map(this.latestQuoteMap);
   }
 
+  private isSnapshotExpired(snapshot: BalanceSnapshot): boolean {
+    if (config.balanceRefreshInterval === 0) {
+      return false;
+    }
+
+    return Date.now() - snapshot.fetchedAt >= config.balanceRefreshInterval;
+  }
+
+  private buildSnapshotFromMockBalances(): BalanceSnapshot {
+    const balances = new Map<string, number>();
+
+    for (const [tokenClass, quantity] of Object.entries(config.mockWalletBalances)) {
+      balances.set(tokenClass, quantity);
+    }
+
+    return new BalanceSnapshot(balances, Date.now());
+  }
+
+  private async buildBalanceSnapshot(): Promise<BalanceSnapshot> {
+    if (config.mockMode) {
+      return this.buildSnapshotFromMockBalances();
+    }
+
+    const userAssets = await this.gSwap.assets.getUserAssets(config.walletAddress, 1, 100) as UserAssetsResponse;
+    const balances = new Map<string, number>();
+
+    const tokens = userAssets?.tokens ?? [];
+    for (const token of tokens) {
+      const tokenClass = stringifyTokenClassKey({
+        collection: token.collection ?? token.symbol,
+        category: token.category ?? 'Unit',
+        type: token.type ?? 'none',
+        additionalKey: token.additionalKey ?? 'none'
+      });
+
+      const quantity = parseFloat(token.quantity ?? '0');
+      if (!Number.isNaN(quantity)) {
+        balances.set(tokenClass, quantity);
+      }
+    }
+
+    return new BalanceSnapshot(balances, Date.now());
+  }
+
+  async getBalanceSnapshot(forceRefresh: boolean = false): Promise<BalanceSnapshot> {
+    if (!forceRefresh && this.balanceSnapshot && !this.isSnapshotExpired(this.balanceSnapshot)) {
+      return this.balanceSnapshot;
+    }
+
+    try {
+      const snapshot = await this.buildBalanceSnapshot();
+      this.balanceSnapshot = snapshot;
+      return snapshot;
+    } catch (error) {
+      console.error('Failed to refresh balance snapshot:', error);
+
+      if (this.balanceSnapshot) {
+        return this.balanceSnapshot;
+      }
+
+      const emptySnapshot = config.mockMode
+        ? this.buildSnapshotFromMockBalances()
+        : new BalanceSnapshot(new Map(), Date.now());
+
+      this.balanceSnapshot = emptySnapshot;
+      return emptySnapshot;
+    }
+  }
+
+  async refreshBalanceSnapshot(): Promise<BalanceSnapshot> {
+    return this.getBalanceSnapshot(true);
+  }
+
   /**
    * Get a quote for swapping tokens
    */
@@ -357,6 +458,8 @@ export class GSwapAPI {
         config.walletAddress
       );
 
+      await this.refreshBalanceSnapshot();
+
       return {
         transactionHash: 'unknown', // Transaction hash not available in PendingTransaction
         inputAmount: inputAmount,
@@ -416,26 +519,8 @@ export class GSwapAPI {
    */
   async getTokenBalance(tokenClass: string): Promise<number> {
     try {
-      // Get user's assets using gSwap SDK (more efficient)
-      const userAssets = await this.gSwap.assets.getUserAssets(config.walletAddress, 1, 100);
-      
-      // Find token by matching the token class key
-      const userToken = userAssets.tokens.find(token => {
-        // Create token class key from user asset data
-        const userTokenClassKey = stringifyTokenClassKey({
-          collection: token.symbol, // In user assets, symbol is the collection
-          category: 'Unit',
-          type: 'none',
-          additionalKey: 'none'
-        });
-        return userTokenClassKey === tokenClass;
-      });
-
-      if (userToken) {
-        return parseFloat(userToken.quantity);
-      }
-
-      return 0;
+      const snapshot = await this.getBalanceSnapshot();
+      return snapshot.getBalance(tokenClass);
     } catch (error) {
       console.error(`Failed to get balance for ${tokenClass}:`, error);
       return 0;
@@ -445,15 +530,16 @@ export class GSwapAPI {
   /**
    * Check if wallet has sufficient balance for trading
    */
-  async checkTradingFunds(requiredAmount: number, tokenClass: string): Promise<{
+  async checkTradingFunds(requiredAmount: number, tokenClass: string, snapshot?: BalanceSnapshot): Promise<{
     hasFunds: boolean;
     currentBalance: number;
     shortfall: number;
   }> {
     try {
-      const currentBalance = await this.getTokenBalance(tokenClass);
+      const balanceSnapshot = snapshot ?? await this.getBalanceSnapshot();
+      const currentBalance = balanceSnapshot.getBalance(tokenClass);
       const shortfall = Math.max(0, requiredAmount - currentBalance);
-      
+
       return {
         hasFunds: currentBalance >= requiredAmount,
         currentBalance,
