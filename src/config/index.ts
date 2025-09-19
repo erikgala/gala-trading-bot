@@ -21,6 +21,11 @@ export interface BotConfig {
   // GalaSwap API Configuration
   galaSwapApiUrl: string;
   
+  // Mock Trading Configuration
+  mockMode: boolean;
+  mockRunName: string;
+  mockWalletBalances: Record<string, number>;
+  
   // Logging
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
@@ -38,6 +43,11 @@ export const config: BotConfig = {
   stopLossPercentage: parseFloat(process.env.STOP_LOSS_PERCENTAGE || '5.0'), // 5%
   
   galaSwapApiUrl: process.env.GALASWAP_API_URL || 'https://dex-backend-prod1.defi.gala.com',
+  
+  // Mock Trading Configuration
+  mockMode: process.env.MOCK_MODE === 'true',
+  mockRunName: process.env.MOCK_RUN_NAME?.replace('${timestamp}', Date.now().toString()) || `run_${Date.now()}`,
+  mockWalletBalances: JSON.parse(process.env.MOCK_WALLET_BALANCES || '{"GALA|Unit|none|none": 10000, "GUSDC|Unit|none|none": 5000, "GUSDT|Unit|none|none": 5000, "GWETH|Unit|none|none": 10, "GWBTC|Unit|none|none": 1}'),
   
   logLevel: (process.env.LOG_LEVEL as BotConfig['logLevel']) || 'info',
 };

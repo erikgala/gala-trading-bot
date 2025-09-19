@@ -1,6 +1,8 @@
 import { BlockData, TransactionData, EventProcessor, ActionData, DexV3BatchSubmit } from './types';
 import { ArbitrageDetector, ArbitrageOpportunity } from '../strategies/arbitrage';
 import { GSwapAPI } from '../api/gswap';
+import { MockTradeExecutor } from '../mock/mockTradeExecutor';
+import { config } from '../config';
 
 export class RealTimeEventProcessor implements EventProcessor {
   private processedBlocks: Set<number> = new Set();
@@ -9,10 +11,12 @@ export class RealTimeEventProcessor implements EventProcessor {
   private tradesExecuted: number = 0;
   private arbitrageDetector: ArbitrageDetector;
   private api: GSwapAPI;
+  private mockTradeExecutor: MockTradeExecutor;
 
   constructor(api: GSwapAPI) {
     this.api = api;
     this.arbitrageDetector = new ArbitrageDetector();
+    this.mockTradeExecutor = new MockTradeExecutor();
   }
 
   /**
@@ -150,7 +154,17 @@ export class RealTimeEventProcessor implements EventProcessor {
         
         if (bestOpportunity.hasFunds) {
           console.log(`✅ Sufficient funds available for arbitrage trade`);
-          await this.executeArbitrageTrade(bestOpportunity, swapData);
+          
+          if (config.mockMode) {
+            // Execute mock trade
+            const success = await this.mockTradeExecutor.executeArbitrageTrade(bestOpportunity);
+            if (success) {
+              this.tradesExecuted++;
+            }
+          } else {
+            // Execute real trade (placeholder for now)
+            await this.executeArbitrageTrade(bestOpportunity, swapData);
+          }
         } else {
           console.log(`⚠️  Insufficient funds for arbitrage trade`);
           console.log(`   Required: ${bestOpportunity.maxTradeAmount}`);
@@ -291,13 +305,35 @@ export class RealTimeEventProcessor implements EventProcessor {
     blocksFiltered: number;
     opportunitiesFound: number;
     tradesExecuted: number;
+    mockStats?: {
+      totalTransactions: number;
+      arbitrageTrades: number;
+      swapTrades: number;
+      totalProfit: number;
+      successRate: number;
+    };
   } {
-    return {
+    const stats: any = {
       blocksProcessed: this.processedBlocks.size,
       blocksFiltered: this.filteredBlocks,
       opportunitiesFound: this.opportunitiesFound,
       tradesExecuted: this.tradesExecuted,
     };
+
+    if (config.mockMode) {
+      stats.mockStats = this.mockTradeExecutor.getStats();
+    }
+
+    return stats;
+  }
+
+  /**
+   * Generate final mock trading report
+   */
+  generateMockReport(): void {
+    if (config.mockMode) {
+      this.mockTradeExecutor.generateFinalReport();
+    }
   }
 
   /**

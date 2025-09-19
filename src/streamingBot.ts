@@ -52,6 +52,9 @@ class GalaStreamingBot {
     // Stop Kafka consumer
     await this.kafkaConsumer.stop();
 
+    // Generate mock trading report if in mock mode
+    this.eventProcessor.generateMockReport();
+
     // Cancel all active trades
     const activeTrades = this.executor.getActiveTrades();
     for (const trade of activeTrades) {
@@ -87,6 +90,13 @@ class GalaStreamingBot {
       blocksFiltered: number;
       opportunitiesFound: number;
       tradesExecuted: number;
+      mockStats?: {
+        totalTransactions: number;
+        arbitrageTrades: number;
+        swapTrades: number;
+        totalProfit: number;
+        successRate: number;
+      };
     };
     tradingStats: {
       totalTrades: number;
@@ -117,6 +127,16 @@ class GalaStreamingBot {
       console.log(`   Trades Executed: ${status.tradingStats.totalTrades}`);
       console.log(`   Success Rate: ${status.tradingStats.successRate.toFixed(1)}%`);
       console.log(`   Total Profit: ${status.tradingStats.totalProfit.toFixed(2)}`);
+      
+      // Show mock trading stats if in mock mode
+      if (status.processingStats.mockStats) {
+        console.log('\n🎭 Mock Trading Stats:');
+        console.log(`   Total Transactions: ${status.processingStats.mockStats.totalTransactions}`);
+        console.log(`   Arbitrage Trades: ${status.processingStats.mockStats.arbitrageTrades}`);
+        console.log(`   Swap Trades: ${status.processingStats.mockStats.swapTrades}`);
+        console.log(`   Total Profit: ${status.processingStats.mockStats.totalProfit.toFixed(6)}`);
+        console.log(`   Success Rate: ${status.processingStats.mockStats.successRate.toFixed(2)}%`);
+      }
     }
   }
 }
