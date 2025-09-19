@@ -14,9 +14,16 @@ export interface TradeExecution {
   error?: string;
 }
 
+class TradeCancelledError extends Error {
+  constructor() {
+    super('Trade cancelled');
+    this.name = 'TradeCancelledError';
+  }
+}
+
 export class TradeExecutor {
   private activeTrades: Map<string, TradeExecution> = new Map();
-  private maxRetries = 3;
+  private maxRetries = 1;
   private retryDelay = 2000; // 2 seconds
 
   constructor(private api: GSwapAPI) {}
@@ -56,11 +63,18 @@ export class TradeExecutor {
       console.log(`💰 Actual profit: ${execution.actualProfit?.toFixed(2) || 'Unknown'}`);
 
     } catch (error) {
-      execution.status = 'failed';
-      execution.error = error instanceof Error ? error.message : 'Unknown error';
+      const isCancelled = error instanceof TradeCancelledError || execution.status === 'cancelled';
+
+      if (isCancelled) {
+        execution.status = 'cancelled';
+        execution.error = 'Trade cancelled';
+      } else {
+        execution.status = 'failed';
+        execution.error = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`❌ Arbitrage execution failed: ${execution.id}`, error);
+      }
+
       execution.endTime = Date.now();
-      
-      console.error(`❌ Arbitrage execution failed: ${execution.id}`, error);
     } finally {
       // Clean up completed trades after a delay
       setTimeout(() => {
@@ -79,10 +93,10 @@ export class TradeExecutor {
     console.log(`🔄 Executing buy swap: ${opportunity.tokenClassA} -> ${opportunity.tokenClassB}`);
     
     const buySwap = await this.executeSwapWithRetry(
+      execution,
       opportunity.tokenClassA,
       opportunity.tokenClassB,
-      opportunity.maxTradeAmount,
-      opportunity.buyQuote
+      opportunity.maxTradeAmount
     );
 
     execution.buySwap = buySwap;
@@ -93,10 +107,10 @@ export class TradeExecutor {
     console.log(`🔄 Executing sell swap: ${opportunity.tokenClassB} -> ${opportunity.tokenClassA}`);
     
     const sellSwap = await this.executeSwapWithRetry(
+      execution,
       opportunity.tokenClassB,
       opportunity.tokenClassA,
-      buySwap.outputAmount, // Use the output from the buy swap
-      opportunity.sellQuote
+      buySwap.outputAmount // Use the output from the buy swap
     );
 
     execution.sellSwap = sellSwap;
@@ -111,42 +125,58 @@ export class TradeExecutor {
   }
 
   private async executeSwapWithRetry(
+    execution: TradeExecution,
     inputTokenClass: string,
     outputTokenClass: string,
-    inputAmount: number,
-    expectedQuote: any
+    inputAmount: number
   ): Promise<SwapResult> {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      if (execution.status === 'cancelled') {
+        throw new TradeCancelledError();
+      }
+
       try {
         console.log(`🔄 Executing swap (attempt ${attempt}/${this.maxRetries})`);
         console.log(`   ${inputTokenClass} -> ${outputTokenClass}`);
         console.log(`   Amount: ${inputAmount}`);
-        
+
         const result = await this.api.executeSwap(
           inputTokenClass,
           outputTokenClass,
           inputAmount,
           config.slippageTolerance
         );
-        
+
+        if (!result) {
+          throw new Error('Swap execution returned no result');
+        }
+
+        if (!result.transactionHash) {
+          throw new Error('Swap execution missing transaction hash');
+        }
+
         console.log(`✅ Swap executed successfully: ${result.transactionHash}`);
         console.log(`   Input: ${result.inputAmount}`);
         console.log(`   Output: ${result.outputAmount}`);
         console.log(`   Price: ${result.actualPrice.toFixed(6)}`);
-        
+
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Unknown error');
         console.warn(`⚠️  Swap execution failed (attempt ${attempt}/${this.maxRetries}):`, lastError.message);
-        
+
         if (attempt < this.maxRetries) {
           const delay = this.retryDelay * attempt;
           console.log(`⏳ Waiting ${delay}ms before retry...`);
           await this.delay(delay);
         }
       }
+    }
+
+    if (execution.status === 'cancelled') {
+      throw new TradeCancelledError();
     }
 
     throw lastError || new Error('Swap execution failed after all retries');
@@ -180,8 +210,9 @@ export class TradeExecutor {
     }
 
     execution.status = 'cancelled';
+    execution.error = 'Trade cancelled';
     execution.endTime = Date.now();
-    
+
     console.log(`🛑 Trade execution cancelled: ${id}`);
     return true;
   }
