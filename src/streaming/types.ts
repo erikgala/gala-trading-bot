@@ -120,6 +120,5 @@ export interface KafkaConfig {
 
 export interface EventProcessor {
   processBlock(blockData: BlockData): Promise<void>;
-  processSwap(swapEvent: SwapEvent): Promise<void>;
   processTransaction(txData: TransactionData): Promise<void>;
 }

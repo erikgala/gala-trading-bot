@@ -1,5 +1,31 @@
-import { GSwap, PrivateKeySigner } from '@gala-chain/gswap-sdk';
+import { GSwap, PrivateKeySigner, stringifyTokenClassKey } from '@gala-chain/gswap-sdk';
 import { config } from '../config';
+
+// Types for GalaSwap API responses
+interface GalaSwapToken {
+  collection: string;
+  category: string;
+  type: string;
+  additionalKey: string;
+  decimals: string;
+  quantity: string;
+  compositeKey: string;
+  image: string;
+  name: string;
+  symbol: string;
+  description: string;
+  verify: boolean;
+}
+
+interface GalaSwapTokenListResponse {
+  status: number;
+  error: boolean;
+  message: string;
+  data: {
+    token: GalaSwapToken[];
+    count: number;
+  };
+}
 
 export interface TokenInfo {
   symbol: string;
@@ -39,6 +65,8 @@ export interface SwapResult {
 export class GSwapAPI {
   private gSwap: GSwap;
   private signer: PrivateKeySigner;
+  private availableTokens: TokenInfo[] = [];
+  private tokensLoaded: boolean = false;
 
   constructor() {
     this.signer = new PrivateKeySigner(config.privateKey);
@@ -55,47 +83,92 @@ export class GSwapAPI {
   }
 
   /**
-   * Get token information for common tokens
+   * Load all available tokens from GalaSwap API at startup
+   */
+  async loadAvailableTokens(): Promise<void> {
+    try {
+      console.log('🔄 Loading available tokens from GalaSwap API...');
+      
+      // Fetch all available tokens from GalaSwap API
+      const response = await fetch(`${config.galaSwapApiUrl}/user/token-list?search=&page=1&limit=100`);
+      const data = await response.json() as GalaSwapTokenListResponse;
+      
+      if (data.status === 200 && data.data && data.data.token) {
+        this.availableTokens = data.data.token.map(token => ({
+          symbol: token.symbol,
+          name: token.name,
+          decimals: parseInt(token.decimals),
+          tokenClass: token.compositeKey.replace(/\$/g, '|'),
+          price: 0, // Will be fetched from quotes
+          priceChange24h: 0
+        }));
+        
+        this.tokensLoaded = true;
+        console.log(`✅ Loaded ${this.availableTokens.length} available tokens from GalaSwap`);
+      } else {
+        throw new Error('Failed to load tokens from GalaSwap API');
+      }
+    } catch (error) {
+      console.error('❌ Failed to load available tokens:', error);
+      // Fallback to common tokens
+      this.availableTokens = [
+        { symbol: 'GALA', name: 'Gala', decimals: 8, tokenClass: 'GALA|Unit|none|none', price: 0, priceChange24h: 0 },
+        { symbol: 'GUSDC', name: 'Gala USD Coin', decimals: 6, tokenClass: 'GUSDC|Unit|none|none', price: 0, priceChange24h: 0 },
+        { symbol: 'GUSDT', name: 'Gala Tether', decimals: 6, tokenClass: 'GUSDT|Unit|none|none', price: 0, priceChange24h: 0 },
+        { symbol: 'GWETH', name: 'Gala Wrapped Ethereum', decimals: 18, tokenClass: 'GWETH|Unit|none|none', price: 0, priceChange24h: 0 },
+        { symbol: 'GWBTC', name: 'Gala Wrapped Bitcoin', decimals: 8, tokenClass: 'GWBTC|Unit|none|none', price: 0, priceChange24h: 0 }
+      ];
+      this.tokensLoaded = true;
+      console.log('⚠️  Using fallback token list');
+    }
+  }
+
+  /**
+   * Get token information from cached token list by token class key
+   */
+  async getTokenInfoByClassKey(tokenClassKey: string): Promise<TokenInfo | null> {
+    try {
+      // Ensure tokens are loaded
+      if (!this.tokensLoaded) {
+        await this.loadAvailableTokens();
+      }
+
+      // Find token in cached list by token class key
+      const token = this.availableTokens.find(t => 
+        t.tokenClass === tokenClassKey
+      );
+
+      return token || null;
+    } catch (error) {
+      console.error(`Failed to get token info for ${tokenClassKey}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get token information from cached token list by token data
+   */
+  async getTokenInfoByData(tokenData: { collection: string; category: string; type: string; additionalKey: string }): Promise<TokenInfo | null> {
+    const tokenClassKey = this.createTokenClassKey(tokenData);
+    return this.getTokenInfoByClassKey(tokenClassKey);
+  }
+
+  /**
+   * Get token information from cached token list by symbol (backward compatibility)
    */
   async getTokenInfo(symbol: string): Promise<TokenInfo | null> {
     try {
-      // Common token mappings - in a real implementation, you'd fetch this from the chain
-      const tokenMap: Record<string, TokenInfo> = {
-        'GALA': {
-          symbol: 'GALA',
-          name: 'Gala',
-          decimals: 8,
-          tokenClass: 'GALA|Unit|none|none',
-          price: 0, // Will be fetched from quotes
-          priceChange24h: 0
-        },
-        'GUSDC': {
-          symbol: 'GUSDC',
-          name: 'Gala USD Coin',
-          decimals: 6,
-          tokenClass: 'GUSDC|Unit|none|none',
-          price: 0,
-          priceChange24h: 0
-        },
-        'GETH': {
-          symbol: 'GETH',
-          name: 'Gala Ethereum',
-          decimals: 18,
-          tokenClass: 'GETH|Unit|none|none',
-          price: 0,
-          priceChange24h: 0
-        },
-        'GBTC': {
-          symbol: 'GBTC',
-          name: 'Gala Bitcoin',
-          decimals: 8,
-          tokenClass: 'GBTC|Unit|none|none',
-          price: 0,
-          priceChange24h: 0
-        }
-      };
+      // Ensure tokens are loaded
+      if (!this.tokensLoaded) {
+        await this.loadAvailableTokens();
+      }
 
-      return tokenMap[symbol.toUpperCase()] || null;
+      // Find token in cached list by symbol (for backward compatibility)
+      const token = this.availableTokens.find(t => 
+        t.symbol.toUpperCase() === symbol.toUpperCase()
+      );
+
+      return token || null;
     } catch (error) {
       console.error(`Failed to get token info for ${symbol}:`, error);
       return null;
@@ -103,53 +176,57 @@ export class GSwapAPI {
   }
 
   /**
-   * Get all available tokens
+   * Get all available tokens from cached list
    */
   async getAvailableTokens(): Promise<TokenInfo[]> {
-    const commonTokens = ['GALA', 'GUSDC', 'GETH', 'GBTC'];
-    const tokens: TokenInfo[] = [];
-
-    for (const symbol of commonTokens) {
-      const tokenInfo = await this.getTokenInfo(symbol);
-      if (tokenInfo) {
-        tokens.push(tokenInfo);
+    try {
+      // Ensure tokens are loaded
+      if (!this.tokensLoaded) {
+        await this.loadAvailableTokens();
       }
-    }
 
-    return tokens;
+      return [...this.availableTokens]; // Return a copy to prevent external modification
+    } catch (error) {
+      console.error('Failed to get available tokens:', error);
+      return [];
+    }
   }
 
   /**
-   * Get trading pairs by checking which tokens can be swapped
+   * Get trading pairs by checking which tokens can be swapped (GALA pairs only)
    */
   async getTradingPairs(): Promise<TradingPair[]> {
     try {
       const tokens = await this.getAvailableTokens();
       const pairs: TradingPair[] = [];
 
-      // Test all possible combinations
-      for (let i = 0; i < tokens.length; i++) {
-        for (let j = i + 1; j < tokens.length; j++) {
-          const tokenA = tokens[i];
-          const tokenB = tokens[j];
+      // Find GALA token
+      const galaToken = tokens.find(token => token.tokenClass === 'GALA|Unit|none|none');
+      if (!galaToken) {
+        console.warn('⚠️  GALA token not found in available tokens');
+        return [];
+      }
 
-          // Test if we can get a quote in both directions
-          try {
-            const quoteAB = await this.getQuote(tokenA.tokenClass, tokenB.tokenClass, 1);
-            const quoteBA = await this.getQuote(tokenB.tokenClass, tokenA.tokenClass, 1);
+      // Test GALA against all other tokens
+      for (const otherToken of tokens) {
+        if (otherToken.tokenClass === galaToken.tokenClass) continue; // Skip GALA-GALA pair
 
-            if (quoteAB && quoteBA) {
-              pairs.push({
-                tokenA,
-                tokenB,
-                tokenClassA: tokenA.tokenClass,
-                tokenClassB: tokenB.tokenClass
-              });
-            }
-          } catch (error) {
-            // Skip pairs that don't have liquidity
-            console.warn(`No liquidity for ${tokenA.symbol} <-> ${tokenB.symbol}`);
+        // Test if we can get a quote in both directions
+        try {
+          const quoteAB = await this.getQuote(galaToken.tokenClass, otherToken.tokenClass, 1);
+          const quoteBA = await this.getQuote(otherToken.tokenClass, galaToken.tokenClass, 1);
+
+          if (quoteAB && quoteBA) {
+            pairs.push({
+              tokenA: galaToken,
+              tokenB: otherToken,
+              tokenClassA: galaToken.tokenClass,
+              tokenClassB: otherToken.tokenClass
+            });
           }
+        } catch (error) {
+          // Skip pairs that don't have liquidity
+          console.warn(`No liquidity for GALA <-> ${otherToken.symbol}`);
         }
       }
 
@@ -281,17 +358,29 @@ export class GSwapAPI {
   }
 
   /**
-   * Get wallet balance for a token
+   * Get wallet balance for a token using gSwap SDK
    */
   async getTokenBalance(tokenClass: string): Promise<number> {
     try {
-      // Extract token symbol from token class (e.g., "GALA|Unit|none|none" -> "GALA")
-      const tokenSymbol = tokenClass.split('|')[0];
+      // Get user's assets using gSwap SDK (more efficient)
+      const userAssets = await this.gSwap.assets.getUserAssets(config.walletAddress, 1, 100);
       
-      // For now, we'll implement a simple balance check
-      // In a real implementation, you'd use the SDK's balance checking methods
-      // This is a placeholder that returns 0 to simulate no balance
-      console.warn(`Balance check for ${tokenSymbol} not fully implemented - returning 0`);
+      // Find token by matching the token class key
+      const userToken = userAssets.tokens.find(token => {
+        // Create token class key from user asset data
+        const userTokenClassKey = stringifyTokenClassKey({
+          collection: token.symbol, // In user assets, symbol is the collection
+          category: 'Unit',
+          type: 'none',
+          additionalKey: 'none'
+        });
+        return userTokenClassKey === tokenClass;
+      });
+
+      if (userToken) {
+        return parseFloat(userToken.quantity);
+      }
+
       return 0;
     } catch (error) {
       console.error(`Failed to get balance for ${tokenClass}:`, error);
@@ -324,6 +413,67 @@ export class GSwapAPI {
         shortfall: requiredAmount
       };
     }
+  }
+
+  /**
+   * Validate if a token is available on GalaSwap by token class key
+   */
+  isTokenAvailableByClassKey(tokenClassKey: string): boolean {
+    if (!this.tokensLoaded) {
+      console.warn('⚠️  Token list not loaded yet, cannot validate token');
+      return false;
+    }
+
+    return this.availableTokens.some(token => 
+      token.tokenClass === tokenClassKey
+    );
+  }
+
+  /**
+   * Validate if a token is available on GalaSwap by token data
+   */
+  isTokenAvailableByData(tokenData: { collection: string; category: string; type: string; additionalKey: string }): boolean {
+    const tokenClassKey = this.createTokenClassKey(tokenData);
+    return this.isTokenAvailableByClassKey(tokenClassKey);
+  }
+
+  /**
+   * Validate if a token is available on GalaSwap (backward compatibility)
+   */
+  isTokenAvailable(tokenSymbol: string): boolean {
+    if (!this.tokensLoaded) {
+      console.warn('⚠️  Token list not loaded yet, cannot validate token');
+      return false;
+    }
+
+    return this.availableTokens.some(token => 
+      token.symbol.toUpperCase() === tokenSymbol.toUpperCase()
+    );
+  }
+
+  /**
+   * Create token class key from block token data
+   */
+  createTokenClassKey(tokenData: { collection: string; category: string; type: string; additionalKey: string }): string {
+    return stringifyTokenClassKey({
+      collection: tokenData.collection,
+      category: tokenData.category,
+      type: tokenData.type,
+      additionalKey: tokenData.additionalKey
+    });
+  }
+
+  /**
+   * Get token info by token class key (for Kafka block validation)
+   */
+  getTokenByClassKey(tokenClassKey: string): TokenInfo | null {
+    if (!this.tokensLoaded) {
+      return null;
+    }
+
+    return this.availableTokens.find(token => 
+      token.tokenClass === tokenClassKey
+    ) || null;
   }
 
   /**

@@ -1,4 +1,4 @@
-import { GSwapAPI, TradingPair, SwapQuote } from '../api/gswap';
+import { GSwapAPI, TradingPair, SwapQuote, TokenInfo } from '../api/gswap';
 import { config } from '../config';
 
 export interface ArbitrageOpportunity {
@@ -18,35 +18,129 @@ export interface ArbitrageOpportunity {
   currentBalance: number;
   shortfall: number;
   timestamp: number;
+  // Enhanced properties for real-time analysis
+  currentMarketPrice?: number;
+  priceDiscrepancy?: number;
+  confidence?: number;
+}
+
+export interface SwapData {
+  tokenIn: {
+    collection: string;
+    category: string;
+    type: string;
+    additionalKey: string;
+  };
+  tokenOut: {
+    collection: string;
+    category: string;
+    type: string;
+    additionalKey: string;
+  };
+  amountIn: string;
+  amountInMaximum: string;
+  fee: number;
+  sqrtPriceLimit: string;
+  recipient: string;
+  signature: string;
+  uniqueKey: string;
+  method: string;
+  uniqueId: string;
 }
 
 export interface ArbitrageStrategy {
   name: string;
   description: string;
-  detectOpportunities(pairs: TradingPair[], api: GSwapAPI): Promise<ArbitrageOpportunity[]>;
+  detectOpportunitiesForSwap(swapData: SwapData, currentPrice: number, api: GSwapAPI): Promise<ArbitrageOpportunity[]>;
+  detectOpportunities?(pairs: TradingPair[], api: GSwapAPI): Promise<ArbitrageOpportunity[]>;
 }
 
 export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
   name = 'Cross-Pair Arbitrage';
   description = 'Detects arbitrage opportunities between different trading pairs for the same token';
 
+  async detectOpportunitiesForSwap(
+    swapData: SwapData,
+    currentPrice: number,
+    api: GSwapAPI
+  ): Promise<ArbitrageOpportunity[]> {
+    const opportunities: ArbitrageOpportunity[] = [];
+    
+    // Get token class keys for the swap
+    const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
+    const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
+    
+    console.log(`   Analyzing cross-pair arbitrage for ${swapData.tokenIn.collection}/${swapData.tokenOut.collection}`);
+    
+    // Only analyze if GALA is involved
+    const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
+    if (tokenInClassKey !== GALA_TOKEN_CLASS && tokenOutClassKey !== GALA_TOKEN_CLASS) {
+      console.log(`   Skipping cross-pair analysis - no GALA token involved`);
+      return opportunities;
+    }
+    
+    // Get all available tokens to find related pairs
+    const availableTokens = await api.getAvailableTokens();
+    const galaToken = availableTokens.find(t => t.tokenClass === GALA_TOKEN_CLASS);
+    
+    if (!galaToken) {
+      console.log(`   GALA token not found in available tokens`);
+      return opportunities;
+    }
+    
+    // Find tokens that could form triangular arbitrage opportunities
+    const relatedTokens = this.findRelatedTokensForArbitrage(swapData, availableTokens, api);
+    
+    console.log(`   Found ${relatedTokens.length} related tokens for triangular arbitrage`);
+    console.log(`   Related tokens: ${relatedTokens.map(t => t.symbol).join(', ')}`);
+    
+    // Analyze triangular arbitrage opportunities
+    for (const relatedToken of relatedTokens) {
+      const opportunity = await this.analyzeTriangularArbitrage(
+        swapData, 
+        galaToken, 
+        relatedToken, 
+        currentPrice, 
+        api
+      );
+      
+      if (opportunity) {
+        opportunities.push(opportunity);
+      }
+    }
+    
+    return opportunities.sort((a, b) => b.profitPercentage - a.profitPercentage);
+  }
+
+  // Backward compatibility method
   async detectOpportunities(
     pairs: TradingPair[],
     api: GSwapAPI
   ): Promise<ArbitrageOpportunity[]> {
     const opportunities: ArbitrageOpportunity[] = [];
     
+    // Filter pairs to only include GALA pairs
+    const galaPairs = pairs.filter(pair => 
+      pair.tokenClassA === 'GALA|Unit|none|none' || pair.tokenClassB === 'GALA|Unit|none|none'
+    );
+    
+    console.log(`   Analyzing ${galaPairs.length} GALA pairs for cross-pair arbitrage`);
+    
     // Group pairs by tokens to find cross-pair opportunities
-    const pairsByToken = this.groupPairsByToken(pairs);
+    const pairsByToken = this.groupPairsByToken(galaPairs);
     
     for (const [token, tokenPairs] of pairsByToken.entries()) {
       if (tokenPairs.length < 2) continue;
+      
+      console.log(`   Checking ${token} pairs (${tokenPairs.length} pairs)`);
       
       // Compare all pairs for this token
       for (let i = 0; i < tokenPairs.length; i++) {
         for (let j = i + 1; j < tokenPairs.length; j++) {
           const pairA = tokenPairs[i];
           const pairB = tokenPairs[j];
+          
+          console.log(`     Comparing ${pairA.tokenA.symbol}/${pairA.tokenB.symbol} vs ${pairB.tokenA.symbol}/${pairB.tokenB.symbol}`);
           
           const opportunity = await this.analyzePairArbitrage(pairA, pairB, api);
           if (opportunity) {
@@ -79,6 +173,106 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
     }
     
     return grouped;
+  }
+
+  private findRelatedTokensForArbitrage(swapData: SwapData, availableTokens: TokenInfo[], api: GSwapAPI): TokenInfo[] {
+    const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
+    const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
+    const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
+    
+    // Find tokens that are NOT part of the current swap for triangular arbitrage
+    const commonTokens = availableTokens.filter(token => 
+      token.tokenClass !== GALA_TOKEN_CLASS && 
+      token.tokenClass !== tokenInClassKey &&
+      token.tokenClass !== tokenOutClassKey &&
+      (token.symbol === 'GUSDT' || token.symbol === 'GWETH' || token.symbol === 'GWBTC')
+    );
+    
+    return commonTokens.slice(0, 3); // Limit to 3 most common tokens for speed
+  }
+
+  private async analyzeTriangularArbitrage(
+    swapData: SwapData,
+    galaToken: TokenInfo,
+    relatedToken: TokenInfo,
+    currentPrice: number,
+    api: GSwapAPI
+  ): Promise<ArbitrageOpportunity | null> {
+    try {
+      const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
+      const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
+      const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
+      
+      let path1: string, path2: string, path3: string;
+      let token1ClassKey: string, token2ClassKey: string, token3ClassKey: string;
+      
+      if (tokenInClassKey === GALA_TOKEN_CLASS) {
+        // GALA -> TOKEN swap, look for GALA -> TOKEN -> RELATED -> GALA triangular path
+        path1 = `${swapData.tokenIn.collection} -> ${swapData.tokenOut.collection}`;
+        path2 = `${swapData.tokenOut.collection} -> ${relatedToken.symbol}`;
+        path3 = `${relatedToken.symbol} -> ${swapData.tokenIn.collection}`;
+        token1ClassKey = tokenInClassKey;
+        token2ClassKey = tokenOutClassKey;
+        token3ClassKey = relatedToken.tokenClass;
+      } else {
+        // TOKEN -> GALA swap, look for TOKEN -> GALA -> RELATED -> TOKEN triangular path
+        path1 = `${swapData.tokenIn.collection} -> ${swapData.tokenOut.collection}`;
+        path2 = `${swapData.tokenOut.collection} -> ${relatedToken.symbol}`;
+        path3 = `${relatedToken.symbol} -> ${swapData.tokenIn.collection}`;
+        token1ClassKey = tokenInClassKey;
+        token2ClassKey = tokenOutClassKey;
+        token3ClassKey = relatedToken.tokenClass;
+      }
+      
+      console.log(`     Checking triangular path: ${path1} -> ${path2} -> ${path3}`);
+      console.log(`     Debug: token1=${token1ClassKey}, token2=${token2ClassKey}, token3=${token3ClassKey}`);
+      
+      // Get quotes for the triangular path
+      const testAmount = 1;
+      const quote1 = await api.getQuote(token1ClassKey, token2ClassKey, testAmount);
+      const quote2 = await api.getQuote(token2ClassKey, token3ClassKey, testAmount);
+      const quote3 = await api.getQuote(token3ClassKey, token1ClassKey, testAmount);
+      
+      if (!quote1 || !quote2 || !quote3) return null;
+      
+      // Calculate if the triangular path is profitable
+      const rate1 = quote1.outputAmount / quote1.inputAmount;
+      const rate2 = quote2.outputAmount / quote2.inputAmount;
+      const rate3 = quote3.outputAmount / quote3.inputAmount;
+      
+      const finalAmount = testAmount * rate1 * rate2 * rate3;
+      const profitPercentage = ((finalAmount - testAmount) / testAmount) * 100;
+      
+      if (profitPercentage < config.minProfitThreshold) return null;
+      
+      // Check if we have sufficient funds
+      const fundsCheck = await api.checkTradingFunds(config.maxTradeAmount, token1ClassKey);
+      
+      return {
+        id: `triangular-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        tokenA: swapData.tokenIn.collection,
+        tokenB: relatedToken.symbol,
+        tokenClassA: token1ClassKey,
+        tokenClassB: token3ClassKey,
+        buyPrice: rate1 * rate2,
+        sellPrice: 1 / rate3,
+        profitPercentage,
+        estimatedProfit: (profitPercentage / 100) * config.maxTradeAmount,
+        maxTradeAmount: config.maxTradeAmount,
+        buyQuote: quote1,
+        sellQuote: quote3,
+        hasFunds: fundsCheck.hasFunds,
+        currentBalance: fundsCheck.currentBalance,
+        shortfall: fundsCheck.shortfall,
+        timestamp: Date.now(),
+        currentMarketPrice: currentPrice,
+        priceDiscrepancy: Math.abs(currentPrice - (rate1 * rate2)) / currentPrice * 100,
+        confidence: profitPercentage
+      };
+    } catch (error) {
+      console.error('Error analyzing triangular arbitrage:', error);
+      return null;
+    }
   }
 
   private async analyzePairArbitrage(
@@ -218,14 +412,55 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
   name = 'Direct Arbitrage';
   description = 'Detects arbitrage opportunities within the same trading pair (bid-ask spread)';
 
+  async detectOpportunitiesForSwap(
+    swapData: SwapData,
+    currentPrice: number,
+    api: GSwapAPI
+  ): Promise<ArbitrageOpportunity[]> {
+    const opportunities: ArbitrageOpportunity[] = [];
+    
+    // Get token class keys for the swap
+    const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
+    const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
+    
+    console.log(`   Analyzing direct arbitrage for ${swapData.tokenIn.collection}/${swapData.tokenOut.collection}`);
+    
+    // Only analyze if GALA is involved
+    const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
+    if (tokenInClassKey !== GALA_TOKEN_CLASS && tokenOutClassKey !== GALA_TOKEN_CLASS) {
+      console.log(`   Skipping direct arbitrage analysis - no GALA token involved`);
+      return opportunities;
+    }
+    
+    try {
+      const opportunity = await this.analyzeDirectArbitrageForSwap(swapData, currentPrice, api);
+      if (opportunity) {
+        opportunities.push(opportunity);
+      }
+    } catch (error) {
+      console.error(`Error analyzing direct arbitrage for ${swapData.tokenIn.collection}-${swapData.tokenOut.collection}:`, error);
+    }
+    
+    return opportunities.sort((a, b) => b.profitPercentage - a.profitPercentage);
+  }
+
+  // Backward compatibility method
   async detectOpportunities(
     pairs: TradingPair[],
     api: GSwapAPI
   ): Promise<ArbitrageOpportunity[]> {
     const opportunities: ArbitrageOpportunity[] = [];
     
-    for (const pair of pairs) {
+    // Filter pairs to only include GALA pairs
+    const galaPairs = pairs.filter(pair => 
+      pair.tokenClassA === 'GALA|Unit|none|none' || pair.tokenClassB === 'GALA|Unit|none|none'
+    );
+    
+    console.log(`   Analyzing ${galaPairs.length} GALA pairs for direct arbitrage`);
+    
+    for (const pair of galaPairs) {
       try {
+        console.log(`     Checking ${pair.tokenA.symbol}/${pair.tokenB.symbol} for direct arbitrage`);
         const opportunity = await this.analyzeDirectArbitrage(pair, api);
         if (opportunity) {
           opportunities.push(opportunity);
@@ -236,6 +471,74 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
     }
     
     return opportunities.sort((a, b) => b.profitPercentage - a.profitPercentage);
+  }
+
+  private async analyzeDirectArbitrageForSwap(
+    swapData: SwapData,
+    currentPrice: number,
+    api: GSwapAPI
+  ): Promise<ArbitrageOpportunity | null> {
+    try {
+      const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
+      const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
+      
+      console.log(`     Checking direct arbitrage for ${swapData.tokenIn.collection}/${swapData.tokenOut.collection}`);
+      
+      const testAmount = 1;
+      
+      // Get quotes in both directions for the exact pair that was swapped
+      const quoteAB = await api.getQuote(tokenInClassKey, tokenOutClassKey, testAmount);
+      const quoteBA = await api.getQuote(tokenOutClassKey, tokenInClassKey, testAmount);
+      
+      if (!quoteAB || !quoteBA) return null;
+
+      const rateAB = quoteAB.outputAmount / quoteAB.inputAmount;
+      const rateBA = quoteBA.outputAmount / quoteBA.inputAmount;
+      
+      // Check if there's a profitable spread
+      const spread = rateAB - (1 / rateBA);
+      const profitPercentage = (spread / (1 / rateBA)) * 100;
+      
+      console.log(`     Direct arbitrage analysis: ${profitPercentage.toFixed(4)}% profit potential`);
+      
+      if (profitPercentage < config.minProfitThreshold) return null;
+
+      const maxTradeAmount = Math.min(
+        config.maxTradeAmount,
+        quoteAB.inputAmount * 10,
+        quoteBA.inputAmount * 10
+      );
+
+      if (maxTradeAmount <= 0) return null;
+
+      // Check if we have sufficient funds for trading
+      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenInClassKey);
+
+      return {
+        id: `direct-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        tokenA: swapData.tokenIn.collection,
+        tokenB: swapData.tokenOut.collection,
+        tokenClassA: tokenInClassKey,
+        tokenClassB: tokenOutClassKey,
+        buyPrice: 1 / rateBA,
+        sellPrice: rateAB,
+        profitPercentage,
+        estimatedProfit: spread * maxTradeAmount,
+        maxTradeAmount,
+        buyQuote: quoteBA,
+        sellQuote: quoteAB,
+        hasFunds: fundsCheck.hasFunds,
+        currentBalance: fundsCheck.currentBalance,
+        shortfall: fundsCheck.shortfall,
+        timestamp: Date.now(),
+        currentMarketPrice: currentPrice,
+        priceDiscrepancy: Math.abs(currentPrice - rateAB) / currentPrice * 100,
+        confidence: profitPercentage
+      };
+    } catch (error) {
+      console.error('Error analyzing direct arbitrage for swap:', error);
+      return null;
+    }
   }
 
   private async analyzeDirectArbitrage(
@@ -306,6 +609,30 @@ export class ArbitrageDetector {
     ];
   }
 
+  async detectOpportunitiesForSwap(
+    swapData: SwapData,
+    currentPrice: number,
+    api: GSwapAPI
+  ): Promise<ArbitrageOpportunity[]> {
+    const allOpportunities: ArbitrageOpportunity[] = [];
+    
+    for (const strategy of this.strategies) {
+      try {
+        console.log(`🔍 Running ${strategy.name}...`);
+        const opportunities = await strategy.detectOpportunitiesForSwap(swapData, currentPrice, api);
+        console.log(`   Found ${opportunities.length} opportunities`);
+        allOpportunities.push(...opportunities);
+      } catch (error) {
+        console.error(`Error in strategy ${strategy.name}:`, error);
+      }
+    }
+    
+    // Remove duplicates and sort by profit
+    const uniqueOpportunities = this.removeDuplicateOpportunities(allOpportunities);
+    return uniqueOpportunities.sort((a, b) => b.profitPercentage - a.profitPercentage);
+  }
+
+  // Keep the old method for backward compatibility (if needed elsewhere)
   async detectAllOpportunities(
     pairs: TradingPair[],
     api: GSwapAPI
@@ -315,7 +642,7 @@ export class ArbitrageDetector {
     for (const strategy of this.strategies) {
       try {
         console.log(`🔍 Running ${strategy.name}...`);
-        const opportunities = await strategy.detectOpportunities(pairs, api);
+        const opportunities = strategy.detectOpportunities ? await strategy.detectOpportunities(pairs, api) : [];
         console.log(`   Found ${opportunities.length} opportunities`);
         allOpportunities.push(...opportunities);
       } catch (error) {

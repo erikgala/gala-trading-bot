@@ -18,6 +18,9 @@ export interface BotConfig {
   maxConcurrentTrades: number;
   stopLossPercentage: number;
   
+  // GalaSwap API Configuration
+  galaSwapApiUrl: string;
+  
   // Logging
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
@@ -33,6 +36,8 @@ export const config: BotConfig = {
   
   maxConcurrentTrades: parseInt(process.env.MAX_CONCURRENT_TRADES || '3'),
   stopLossPercentage: parseFloat(process.env.STOP_LOSS_PERCENTAGE || '5.0'), // 5%
+  
+  galaSwapApiUrl: process.env.GALASWAP_API_URL || 'https://dex-backend-prod1.defi.gala.com',
   
   logLevel: (process.env.LOG_LEVEL as BotConfig['logLevel']) || 'info',
 };

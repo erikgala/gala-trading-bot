@@ -16,7 +16,7 @@ class GalaStreamingBot {
     this.api = new GSwapAPI();
     this.detector = new ArbitrageDetector();
     this.executor = new TradeExecutor(this.api);
-    this.eventProcessor = new RealTimeEventProcessor(this.api, this.detector, this.executor);
+    this.eventProcessor = new RealTimeEventProcessor(this.api);
     
     // Create Kafka consumer with configuration
     const kafkaConfig = createKafkaConfig();
@@ -25,23 +25,20 @@ class GalaStreamingBot {
 
   async start(): Promise<void> {
     try {
-      console.log('🚀 Starting Gala Streaming Bot...');
-      
       // Validate configuration
       validateConfig();
-      console.log('✅ Configuration validated');
+
+      // Load available tokens at startup
+      await this.api.loadAvailableTokens();
 
       // Test API connection
       await this.testApiConnection();
-      console.log('✅ API connection established');
 
       // Start Kafka consumer
       await this.kafkaConsumer.start();
-      console.log('✅ Kafka consumer started');
 
       this.isRunning = true;
-      console.log('✅ Streaming bot started successfully');
-      console.log('📡 Listening for real-time block data...');
+      console.log('🚀 Gala Streaming Bot started - Monitoring for arbitrage opportunities...');
 
     } catch (error) {
       console.error('❌ Failed to start streaming bot:', error);
@@ -50,8 +47,6 @@ class GalaStreamingBot {
   }
 
   async stop(): Promise<void> {
-    console.log('🛑 Stopping Gala Streaming Bot...');
-    
     this.isRunning = false;
     
     // Stop Kafka consumer
@@ -64,8 +59,6 @@ class GalaStreamingBot {
         await this.executor.cancelTradeExecution(trade.id);
       }
     }
-
-    console.log('✅ Streaming bot stopped');
   }
 
   private async testApiConnection(): Promise<void> {
@@ -92,7 +85,6 @@ class GalaStreamingBot {
     processingStats: {
       blocksProcessed: number;
       blocksFiltered: number;
-      swapsProcessed: number;
       opportunitiesFound: number;
       tradesExecuted: number;
     };
@@ -119,16 +111,13 @@ class GalaStreamingBot {
   logStatus(): void {
     const status = this.getStatus();
     
-    console.log('\n📊 Streaming Bot Status:');
-    console.log(`   Running: ${status.isRunning}`);
-    console.log(`   Kafka Connected: ${status.kafkaStatus.connected}`);
-    console.log(`   Blocks Processed: ${status.processingStats.blocksProcessed}`);
-    console.log(`   Blocks Filtered: ${status.processingStats.blocksFiltered}`);
-    console.log(`   Swaps Processed: ${status.processingStats.swapsProcessed}`);
-    console.log(`   Opportunities Found: ${status.processingStats.opportunitiesFound}`);
-    console.log(`   Trades Executed: ${status.tradingStats.totalTrades}`);
-    console.log(`   Success Rate: ${status.tradingStats.successRate.toFixed(1)}%`);
-    console.log(`   Total Profit: ${status.tradingStats.totalProfit.toFixed(2)}`);
+    if (status.processingStats.opportunitiesFound > 0 || status.tradingStats.totalTrades > 0) {
+      console.log('\n📊 Arbitrage Status:');
+      console.log(`   Opportunities Found: ${status.processingStats.opportunitiesFound}`);
+      console.log(`   Trades Executed: ${status.tradingStats.totalTrades}`);
+      console.log(`   Success Rate: ${status.tradingStats.successRate.toFixed(1)}%`);
+      console.log(`   Total Profit: ${status.tradingStats.totalProfit.toFixed(2)}`);
+    }
   }
 }
 
