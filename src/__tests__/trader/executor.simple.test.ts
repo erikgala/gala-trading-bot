@@ -1,4 +1,4 @@
-import { TradeExecutor, TradeExecution } from '../../trader/executor';
+import { TradeExecutor, TradeExecution, TradeExecutorOptions } from '../../trader/executor';
 import { GSwapAPI, SwapResult } from '../../api/gswap';
 import { ArbitrageOpportunity } from '../../strategies/arbitrage';
 import { 
@@ -13,10 +13,15 @@ const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 describe('TradeExecutor', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let executor: TradeExecutor;
+  const executorOptions: TradeExecutorOptions = {
+    maxRetries: 1,
+    baseRetryDelayMs: 0,
+    maxRetryDelayMs: 0
+  };
 
   beforeEach(() => {
     mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    executor = new TradeExecutor(mockApi);
+    executor = new TradeExecutor(mockApi, executorOptions);
   });
 
   afterEach(() => {
@@ -77,7 +82,7 @@ describe('TradeExecutor', () => {
       const execution = await executor.executeArbitrage(opportunity);
 
       expect(execution.status).toBe('failed');
-      expect(execution.error).toBe('Swap execution returned no result');
+      expect(execution.error).toBe('Buy swap failed');
       expect(execution.buySwap).toBeUndefined();
       expect(execution.sellSwap).toBeUndefined();
     }, 10000);
@@ -93,7 +98,7 @@ describe('TradeExecutor', () => {
       const execution = await executor.executeArbitrage(opportunity);
 
       expect(execution.status).toBe('failed');
-      expect(execution.error).toBe('Swap execution returned no result');
+      expect(execution.error).toBe('Sell swap failed');
       expect(execution.buySwap).toBeDefined();
       expect(execution.sellSwap).toBeUndefined();
     }, 10000);

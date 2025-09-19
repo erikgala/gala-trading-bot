@@ -19,8 +19,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@gala-chain/gswap-sdk": "^0.0.7",
-    "@kafkajs/confluent-schema-registry": "^3.9.0",
+    "@gala-chain/gswap-sdk": "file:stubs/gswap-sdk",
+    "@kafkajs/confluent-schema-registry": "file:stubs/confluent-schema-registry",
     "@types/node": "^24.5.2",
     "axios": "^1.12.2",
     "dotenv": "^17.2.2",
