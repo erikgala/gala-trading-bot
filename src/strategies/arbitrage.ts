@@ -258,7 +258,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
         token3ClassKey = relatedToken.tokenClass;
       }
       
-      console.log(`     Checking triangular path: ${path1} -> ${path2} -> ${path3}`);
+      console.log(`     Checking triangular path: ${path1}, ${path2}, ${path3}`);
       console.log(`     Debug: token1=${token1ClassKey}, token2=${token2ClassKey}, token3=${token3ClassKey}`);
       
       // Get quotes for the triangular path

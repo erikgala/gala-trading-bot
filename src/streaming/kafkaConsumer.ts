@@ -1,5 +1,5 @@
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
-import { BlockData, TransactionData, KafkaConfig, EventProcessor } from './types';
+import { BlockData, KafkaConfig, EventProcessor } from './types';
 
 export class KafkaBlockConsumer {
   private kafka: Kafka;
@@ -175,42 +175,12 @@ export class KafkaBlockConsumer {
 
       await this.eventProcessor.processBlock(blockData);
 
-      // Process individual transactions for swap detection
-      for (const tx of blockData.transactions) {
-        await this.processTransactionMessage(tx);
-      }
-
     } catch (error) {
       console.error('❌ Error processing block message:', error);
     }
   }
 
 
-  /**
-   * Process transaction messages
-   */
-  private async processTransactionMessage(data: any): Promise<void> {
-    try {
-      // Parse the real transaction data structure
-      const txData: TransactionData = {
-        id: data.id || '',
-        creator: data.creator || { mspId: '', name: '' },
-        type: data.type || '',
-        validationCode: data.validationCode || {
-          transactionId: '',
-          validationCode: 0,
-          validationEnum: 'UNKNOWN'
-        },
-        actions: data.actions || [],
-      };
-
-      // Process all transactions (we'll filter for DexV3Contract:BatchSubmit in the processor)
-      await this.eventProcessor.processTransaction(txData);
-
-    } catch (error) {
-      console.error('❌ Error processing transaction message:', error);
-    }
-  }
 
 
   /**

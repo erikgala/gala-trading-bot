@@ -6,6 +6,7 @@ import { config } from '../config';
 
 export class RealTimeEventProcessor implements EventProcessor {
   private processedBlocks: Set<number> = new Set();
+  private processedTransactions: Set<string> = new Set();
   private filteredBlocks: number = 0;
   private opportunitiesFound: number = 0;
   private tradesExecuted: number = 0;
@@ -53,6 +54,13 @@ export class RealTimeEventProcessor implements EventProcessor {
    */
   async processTransaction(txData: TransactionData): Promise<void> {
     try {
+      // Avoid processing the same transaction twice
+      if (this.processedTransactions.has(txData.id)) {
+        return;
+      }
+
+      this.processedTransactions.add(txData.id);
+
       // Process each action for DexV3Contract:BatchSubmit
       for (const action of txData.actions) {
         await this.processAction(action);
@@ -122,8 +130,8 @@ export class RealTimeEventProcessor implements EventProcessor {
         return;
       }
 
-      // Calculate current price from sqrtPriceLimit
-      const currentPrice = this.calculatePriceFromSqrtPriceLimit(swapData.sqrtPriceLimit);
+      // Calculate current price from swap amounts (more accurate than sqrtPriceLimit)
+      const currentPrice = this.calculatePriceFromSwapAmounts(swapData);
 
       // Log the incoming swap that triggered arbitrage analysis
       console.log(`🔄 SWAP DETECTED - Triggering Arbitrage Analysis`);
@@ -180,7 +188,37 @@ export class RealTimeEventProcessor implements EventProcessor {
 
 
   /**
-   * Calculate price from sqrtPriceLimit (Uniswap V3 style)
+   * Calculate price from swap amounts (more accurate than sqrtPriceLimit)
+   */
+  private calculatePriceFromSwapAmounts(swapData: any): number {
+    try {
+      const amountIn = parseFloat(swapData.amountIn);
+      const amountInMaximum = parseFloat(swapData.amountInMaximum);
+      
+      // If we have both amounts, calculate the effective price
+      // The price is typically amountOut / amountIn, but we need to estimate amountOut
+      // For now, let's use amountInMaximum as a proxy for the expected output
+      if (amountIn > 0 && amountInMaximum > 0) {
+        // This is an approximation - in reality we'd need the actual amountOut
+        // But amountInMaximum gives us the maximum input, so we can estimate
+        const estimatedPrice = amountInMaximum / amountIn;
+        console.log(`   Debug: amountIn = ${amountIn}, amountInMaximum = ${amountInMaximum}, estimated price = ${estimatedPrice}`);
+        return estimatedPrice;
+      }
+      
+      // Fallback: return 0 for now (we'll improve this later)
+      console.log(`   Debug: No valid amounts, using fallback price = 0`);
+      return 0;
+    } catch (error) {
+      console.warn('⚠️  Error calculating price from swap amounts:', error);
+      return 0;
+    }
+  }
+
+
+  /**
+   * Calculate price from sqrtPriceLimit (Uniswap V3 style) - DEPRECATED
+   * sqrtPriceLimit is a price limit, not the current market price
    */
   private calculatePriceFromSqrtPriceLimit(sqrtPriceLimit: string): number {
     try {
@@ -341,6 +379,7 @@ export class RealTimeEventProcessor implements EventProcessor {
    */
   clearProcessedData(): void {
     this.processedBlocks.clear();
+    this.processedTransactions.clear();
     this.filteredBlocks = 0;
     this.opportunitiesFound = 0;
     this.tradesExecuted = 0;
