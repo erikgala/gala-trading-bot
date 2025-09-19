@@ -4,7 +4,7 @@ import {
   DirectArbitrageStrategy,
   ArbitrageOpportunity
 } from '../../strategies/arbitrage';
-import { GSwapAPI, TradingPair, TokenInfo, SwapQuote } from '../../api/gswap';
+import { GSwapAPI, TradingPair, TokenInfo, QuoteMap } from '../../api/gswap';
 import { 
   createMockTokenInfo, 
   createMockTradingPair, 
@@ -36,38 +36,43 @@ describe('ArbitrageDetector', () => {
         createMockTradingPair('GALA', 'GUSDC')
       ];
 
+      const mockQuoteMap: QuoteMap = new Map();
+
       const mockOpportunities: ArbitrageOpportunity[] = [
         createMockArbitrageOpportunity()
       ];
 
       // Mock the strategies to return opportunities
-      const crossPairStrategy = new CrossPairArbitrageStrategy();
-      const directStrategy = new DirectArbitrageStrategy();
-      
-      jest.spyOn(crossPairStrategy, 'detectOpportunities').mockResolvedValue(mockOpportunities);
-      jest.spyOn(directStrategy, 'detectOpportunities').mockResolvedValue([]);
+      const crossPairSpy = jest
+        .spyOn(CrossPairArbitrageStrategy.prototype, 'detectOpportunities')
+        .mockResolvedValue(mockOpportunities);
+      const directSpy = jest
+        .spyOn(DirectArbitrageStrategy.prototype, 'detectOpportunities')
+        .mockResolvedValue([]);
 
       detector = new ArbitrageDetector();
 
-      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi);
+      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi, mockQuoteMap);
 
       expect(opportunities).toHaveLength(1);
       expect(opportunities[0].id).toBe('test-opportunity');
-      expect(crossPairStrategy.detectOpportunities).toHaveBeenCalledWith(mockPairs, mockApi);
-      expect(directStrategy.detectOpportunities).toHaveBeenCalledWith(mockPairs, mockApi);
+      expect(crossPairSpy).toHaveBeenCalledWith(mockPairs, mockApi, mockQuoteMap);
+      expect(directSpy).toHaveBeenCalledWith(mockPairs, mockApi, mockQuoteMap);
     });
 
     it('should return empty array when no strategies find opportunities', async () => {
       const mockPairs: TradingPair[] = [];
-      const crossPairStrategy = new CrossPairArbitrageStrategy();
-      const directStrategy = new DirectArbitrageStrategy();
-      
-      jest.spyOn(crossPairStrategy, 'detectOpportunities').mockResolvedValue([]);
-      jest.spyOn(directStrategy, 'detectOpportunities').mockResolvedValue([]);
+      const mockQuoteMap: QuoteMap = new Map();
+      jest
+        .spyOn(CrossPairArbitrageStrategy.prototype, 'detectOpportunities')
+        .mockResolvedValue([]);
+      jest
+        .spyOn(DirectArbitrageStrategy.prototype, 'detectOpportunities')
+        .mockResolvedValue([]);
 
       detector = new ArbitrageDetector();
 
-      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi);
+      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi, mockQuoteMap);
 
       expect(opportunities).toHaveLength(0);
     });
@@ -81,11 +86,12 @@ describe('ArbitrageDetector', () => {
         createMockArbitrageOpportunity()
       ];
 
-      const crossPairStrategy = new CrossPairArbitrageStrategy();
-      const directStrategy = new DirectArbitrageStrategy();
-      
-      jest.spyOn(crossPairStrategy, 'detectOpportunitiesForSwap').mockResolvedValue(mockOpportunities);
-      jest.spyOn(directStrategy, 'detectOpportunitiesForSwap').mockResolvedValue([]);
+      const crossPairSpy = jest
+        .spyOn(CrossPairArbitrageStrategy.prototype, 'detectOpportunitiesForSwap')
+        .mockResolvedValue(mockOpportunities);
+      const directSpy = jest
+        .spyOn(DirectArbitrageStrategy.prototype, 'detectOpportunitiesForSwap')
+        .mockResolvedValue([]);
 
       detector = new ArbitrageDetector();
 
@@ -93,8 +99,8 @@ describe('ArbitrageDetector', () => {
 
       expect(opportunities).toHaveLength(1);
       expect(opportunities[0].id).toBe('test-opportunity');
-      expect(crossPairStrategy.detectOpportunitiesForSwap).toHaveBeenCalledWith(swapData, currentPrice, mockApi);
-      expect(directStrategy.detectOpportunitiesForSwap).toHaveBeenCalledWith(swapData, currentPrice, mockApi);
+      expect(crossPairSpy).toHaveBeenCalledWith(swapData, currentPrice, mockApi);
+      expect(directSpy).toHaveBeenCalledWith(swapData, currentPrice, mockApi);
     });
   });
 });
@@ -119,6 +125,8 @@ describe('CrossPairArbitrageStrategy', () => {
         createMockTradingPair('GUSDC', 'GUSDT') // This should be ignored
       ];
 
+      const quoteMap: QuoteMap = new Map();
+
       const mockTokens: TokenInfo[] = [
         createMockTokenInfo('GALA', 'GALA|Unit|none|none'),
         createMockTokenInfo('GUSDC', 'GUSDC|Unit|none|none'),
@@ -128,7 +136,7 @@ describe('CrossPairArbitrageStrategy', () => {
       mockApi.getAvailableTokens.mockResolvedValue(mockTokens);
       mockApi.getQuote.mockResolvedValue(createMockSwapQuote(1000, 25000));
 
-      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi);
+      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi, quoteMap);
 
       // Should only process GALA pairs
       expect(Array.isArray(opportunities)).toBe(true);
@@ -175,7 +183,9 @@ describe('DirectArbitrageStrategy', () => {
         createMockTradingPair('GUSDC', 'GUSDT') // This should be ignored
       ];
 
-      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi);
+      const quoteMap: QuoteMap = new Map();
+
+      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi, quoteMap);
 
       expect(Array.isArray(opportunities)).toBe(true);
       // Should only process GALA pairs, so GUSDC/GUSDT pair should be ignored
