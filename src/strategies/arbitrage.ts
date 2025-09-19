@@ -1,5 +1,34 @@
-import { GSwapAPI, TradingPair, SwapQuote, TokenInfo } from '../api/gswap';
+import { GSwapAPI, TradingPair, SwapQuote, TokenInfo, QuoteMap, buildQuoteCacheKey } from '../api/gswap';
 import { config } from '../config';
+
+const QUOTE_CACHE_TTL_MS = 30_000;
+
+async function getQuoteFromCacheOrApi(
+  quoteMap: QuoteMap | undefined,
+  api: GSwapAPI,
+  inputTokenClass: string,
+  outputTokenClass: string,
+  inputAmount: number
+): Promise<SwapQuote | null> {
+  const cacheKey = buildQuoteCacheKey(inputTokenClass, outputTokenClass, inputAmount);
+
+  if (quoteMap) {
+    const cached = quoteMap.get(cacheKey);
+    const now = Date.now();
+
+    if (cached && now - cached.timestamp <= QUOTE_CACHE_TTL_MS && cached.quote.inputAmount === inputAmount) {
+      return cached.quote;
+    }
+  }
+
+  const liveQuote = await api.getQuote(inputTokenClass, outputTokenClass, inputAmount);
+
+  if (liveQuote && quoteMap) {
+    quoteMap.set(cacheKey, { quote: liveQuote, timestamp: Date.now() });
+  }
+
+  return liveQuote;
+}
 
 export interface ArbitrageOpportunity {
   id: string;
@@ -52,7 +81,7 @@ export interface ArbitrageStrategy {
   name: string;
   description: string;
   detectOpportunitiesForSwap(swapData: SwapData, currentPrice: number, api: GSwapAPI): Promise<ArbitrageOpportunity[]>;
-  detectOpportunities?(pairs: TradingPair[], api: GSwapAPI): Promise<ArbitrageOpportunity[]>;
+  detectOpportunities?(pairs: TradingPair[], api: GSwapAPI, quoteMap: QuoteMap): Promise<ArbitrageOpportunity[]>;
 }
 
 export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
@@ -115,7 +144,8 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
   // Backward compatibility method
   async detectOpportunities(
     pairs: TradingPair[],
-    api: GSwapAPI
+    api: GSwapAPI,
+    quoteMap: QuoteMap
   ): Promise<ArbitrageOpportunity[]> {
     const opportunities: ArbitrageOpportunity[] = [];
     
@@ -142,7 +172,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
           
           console.log(`     Comparing ${pairA.tokenA.symbol}/${pairA.tokenB.symbol} vs ${pairB.tokenA.symbol}/${pairB.tokenB.symbol}`);
           
-          const opportunity = await this.analyzePairArbitrage(pairA, pairB, api);
+          const opportunity = await this.analyzePairArbitrage(pairA, pairB, api, quoteMap);
           if (opportunity) {
             opportunities.push(opportunity);
           }
@@ -278,7 +308,8 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
   private async analyzePairArbitrage(
     pairA: TradingPair,
     pairB: TradingPair,
-    api: GSwapAPI
+    api: GSwapAPI,
+    quoteMap: QuoteMap
   ): Promise<ArbitrageOpportunity | null> {
     try {
       // Find common token between the pairs
@@ -289,12 +320,12 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
       const testAmount = 1; // Test with 1 unit
       
       // Get quotes for A -> common token
-      const quoteA1 = await api.getQuote(pairA.tokenClassA, pairA.tokenClassB, testAmount);
-      const quoteA2 = await api.getQuote(pairA.tokenClassB, pairA.tokenClassA, testAmount);
-      
-      // Get quotes for B -> common token  
-      const quoteB1 = await api.getQuote(pairB.tokenClassA, pairB.tokenClassB, testAmount);
-      const quoteB2 = await api.getQuote(pairB.tokenClassB, pairB.tokenClassA, testAmount);
+      const quoteA1 = await getQuoteFromCacheOrApi(quoteMap, api, pairA.tokenClassA, pairA.tokenClassB, testAmount);
+      const quoteA2 = await getQuoteFromCacheOrApi(quoteMap, api, pairA.tokenClassB, pairA.tokenClassA, testAmount);
+
+      // Get quotes for B -> common token
+      const quoteB1 = await getQuoteFromCacheOrApi(quoteMap, api, pairB.tokenClassA, pairB.tokenClassB, testAmount);
+      const quoteB2 = await getQuoteFromCacheOrApi(quoteMap, api, pairB.tokenClassB, pairB.tokenClassA, testAmount);
 
       if (!quoteA1 || !quoteA2 || !quoteB1 || !quoteB2) return null;
 
@@ -447,7 +478,8 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
   // Backward compatibility method
   async detectOpportunities(
     pairs: TradingPair[],
-    api: GSwapAPI
+    api: GSwapAPI,
+    quoteMap: QuoteMap
   ): Promise<ArbitrageOpportunity[]> {
     const opportunities: ArbitrageOpportunity[] = [];
     
@@ -461,7 +493,7 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
     for (const pair of galaPairs) {
       try {
         console.log(`     Checking ${pair.tokenA.symbol}/${pair.tokenB.symbol} for direct arbitrage`);
-        const opportunity = await this.analyzeDirectArbitrage(pair, api);
+        const opportunity = await this.analyzeDirectArbitrage(pair, api, quoteMap);
         if (opportunity) {
           opportunities.push(opportunity);
         }
@@ -543,14 +575,15 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
 
   private async analyzeDirectArbitrage(
     pair: TradingPair,
-    api: GSwapAPI
+    api: GSwapAPI,
+    quoteMap: QuoteMap
   ): Promise<ArbitrageOpportunity | null> {
     try {
       const testAmount = 1;
-      
+
       // Get quotes in both directions
-      const quoteAB = await api.getQuote(pair.tokenClassA, pair.tokenClassB, testAmount);
-      const quoteBA = await api.getQuote(pair.tokenClassB, pair.tokenClassA, testAmount);
+      const quoteAB = await getQuoteFromCacheOrApi(quoteMap, api, pair.tokenClassA, pair.tokenClassB, testAmount);
+      const quoteBA = await getQuoteFromCacheOrApi(quoteMap, api, pair.tokenClassB, pair.tokenClassA, testAmount);
       
       if (!quoteAB || !quoteBA) return null;
 
@@ -635,14 +668,15 @@ export class ArbitrageDetector {
   // Keep the old method for backward compatibility (if needed elsewhere)
   async detectAllOpportunities(
     pairs: TradingPair[],
-    api: GSwapAPI
+    api: GSwapAPI,
+    quoteMap: QuoteMap
   ): Promise<ArbitrageOpportunity[]> {
     const allOpportunities: ArbitrageOpportunity[] = [];
-    
+
     for (const strategy of this.strategies) {
       try {
         console.log(`🔍 Running ${strategy.name}...`);
-        const opportunities = strategy.detectOpportunities ? await strategy.detectOpportunities(pairs, api) : [];
+        const opportunities = strategy.detectOpportunities ? await strategy.detectOpportunities(pairs, api, quoteMap) : [];
         console.log(`   Found ${opportunities.length} opportunities`);
         allOpportunities.push(...opportunities);
       } catch (error) {
