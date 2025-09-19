@@ -53,6 +53,21 @@ export interface SwapQuote {
   route: string[];
 }
 
+export interface QuoteCacheEntry {
+  quote: SwapQuote;
+  timestamp: number;
+}
+
+export type QuoteMap = Map<string, QuoteCacheEntry>;
+
+export function buildQuoteCacheKey(
+  inputTokenClass: string,
+  outputTokenClass: string,
+  inputAmount: number
+): string {
+  return `${inputTokenClass}::${outputTokenClass}::${inputAmount}`;
+}
+
 export interface SwapResult {
   transactionHash: string;
   inputAmount: number;
@@ -67,6 +82,7 @@ export class GSwapAPI {
   private signer: PrivateKeySigner;
   private availableTokens: TokenInfo[] = [];
   private tokensLoaded: boolean = false;
+  private latestQuoteMap: QuoteMap = new Map();
 
   constructor() {
     this.signer = new PrivateKeySigner(config.privateKey);
@@ -199,42 +215,80 @@ export class GSwapAPI {
     try {
       const tokens = await this.getAvailableTokens();
       const pairs: TradingPair[] = [];
+      const quoteMap: QuoteMap = new Map();
 
       // Find GALA token
       const galaToken = tokens.find(token => token.tokenClass === 'GALA|Unit|none|none');
       if (!galaToken) {
         console.warn('⚠️  GALA token not found in available tokens');
+        this.latestQuoteMap = quoteMap;
         return [];
       }
 
-      // Test GALA against all other tokens
-      for (const otherToken of tokens) {
-        if (otherToken.tokenClass === galaToken.tokenClass) continue; // Skip GALA-GALA pair
+      const tokensToCheck = tokens.filter(token => token.tokenClass !== galaToken.tokenClass);
+      const concurrencyLimit = Math.max(1, Math.min(5, tokensToCheck.length));
+      let index = 0;
 
-        // Test if we can get a quote in both directions
-        try {
-          const quoteAB = await this.getQuote(galaToken.tokenClass, otherToken.tokenClass, 1);
-          const quoteBA = await this.getQuote(otherToken.tokenClass, galaToken.tokenClass, 1);
-
-          if (quoteAB && quoteBA) {
-            pairs.push({
-              tokenA: galaToken,
-              tokenB: otherToken,
-              tokenClassA: galaToken.tokenClass,
-              tokenClassB: otherToken.tokenClass
-            });
+      const processNext = async (): Promise<void> => {
+        while (true) {
+          const currentIndex = index++;
+          if (currentIndex >= tokensToCheck.length) {
+            return;
           }
-        } catch (error) {
-          // Skip pairs that don't have liquidity
-          console.warn(`No liquidity for GALA <-> ${otherToken.symbol}`);
+
+          const otherToken = tokensToCheck[currentIndex];
+
+          try {
+            const [quoteAB, quoteBA] = await Promise.all([
+              this.getQuote(galaToken.tokenClass, otherToken.tokenClass, 1),
+              this.getQuote(otherToken.tokenClass, galaToken.tokenClass, 1)
+            ]);
+
+            const timestamp = Date.now();
+
+            if (quoteAB) {
+              quoteMap.set(
+                buildQuoteCacheKey(galaToken.tokenClass, otherToken.tokenClass, quoteAB.inputAmount),
+                { quote: quoteAB, timestamp }
+              );
+            }
+
+            if (quoteBA) {
+              quoteMap.set(
+                buildQuoteCacheKey(otherToken.tokenClass, galaToken.tokenClass, quoteBA.inputAmount),
+                { quote: quoteBA, timestamp }
+              );
+            }
+
+            if (quoteAB && quoteBA) {
+              pairs.push({
+                tokenA: galaToken,
+                tokenB: otherToken,
+                tokenClassA: galaToken.tokenClass,
+                tokenClassB: otherToken.tokenClass
+              });
+            } else {
+              console.warn(`No liquidity for GALA <-> ${otherToken.symbol}`);
+            }
+          } catch (error) {
+            console.warn(`Error fetching quotes for GALA <-> ${otherToken.symbol}:`, error);
+          }
         }
-      }
+      };
+
+      await Promise.all(Array.from({ length: concurrencyLimit }, () => processNext()));
+
+      this.latestQuoteMap = quoteMap;
 
       return pairs;
     } catch (error) {
       console.error('Failed to get trading pairs:', error);
       throw error;
     }
+  }
+
+  getLatestQuoteMap(): QuoteMap {
+    return new Map(this.latestQuoteMap);
   }
 
   /**
