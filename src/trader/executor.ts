@@ -21,14 +21,34 @@ class TradeCancelledError extends Error {
   }
 }
 
+export interface TradeExecutorOptions {
+  maxRetries?: number;
+  baseRetryDelayMs?: number;
+  maxRetryDelayMs?: number;
+  quoteMaxAgeMs?: number;
+}
+
 export class TradeExecutor {
   private activeTrades: Map<string, TradeExecution> = new Map();
-  private maxRetries = 3;
-  private readonly baseRetryDelayMs = 250;
-  private readonly maxRetryDelayMs = 1000;
-  private readonly quoteMaxAgeMs = 30_000;
+  private readonly maxRetries: number;
+  private readonly baseRetryDelayMs: number;
+  private readonly maxRetryDelayMs: number;
+  private readonly quoteMaxAgeMs: number;
 
-  constructor(private api: GSwapAPI) {}
+  constructor(private api: GSwapAPI, options: TradeExecutorOptions = {}) {
+    const defaultMaxRetries = 3;
+    const defaultBaseDelay = 250;
+    const defaultMaxDelay = 1000;
+    const defaultQuoteMaxAge = 30_000;
+
+    const providedBaseDelay = options.baseRetryDelayMs ?? defaultBaseDelay;
+    const providedMaxDelay = options.maxRetryDelayMs ?? defaultMaxDelay;
+
+    this.maxRetries = Math.max(1, options.maxRetries ?? defaultMaxRetries);
+    this.baseRetryDelayMs = Math.max(0, providedBaseDelay);
+    this.maxRetryDelayMs = Math.max(this.baseRetryDelayMs, providedMaxDelay);
+    this.quoteMaxAgeMs = Math.max(0, options.quoteMaxAgeMs ?? defaultQuoteMaxAge);
+  }
 
   /**
    * Execute an arbitrage opportunity

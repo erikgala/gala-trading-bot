@@ -1,0 +1,6 @@
+{
+  "name": "@gala-chain/gswap-sdk",
+  "version": "0.0.7",
+  "main": "index.js",
+  "types": "index.d.ts"
+}
