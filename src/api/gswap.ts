@@ -438,7 +438,8 @@ export class GSwapAPI {
         : undefined;
 
       if (!quote) {
-        quote = await this.getQuote(inputTokenClass, outputTokenClass, inputAmount);
+        const fetchedQuote = await this.getQuote(inputTokenClass, outputTokenClass, inputAmount);
+        quote = fetchedQuote || undefined;
       }
 
       if (!quote) {

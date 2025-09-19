@@ -222,7 +222,6 @@ export class TradeExecutor {
 
         if (attempt < this.maxRetries) {
           const delay = this.getAdaptiveRetryDelay(attempt);
-          console.log(`⏳ Waiting ${delay}ms before retry...`);
           await this.delay(delay);
         }
       }

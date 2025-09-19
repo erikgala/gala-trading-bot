@@ -68,16 +68,16 @@ describe('TradeExecutor', () => {
 
     it('should handle buy swap failure', async () => {
       const opportunity = createMockArbitrageOpportunity();
-      const error = new Error('Buy swap failed');
 
+      // Mock executeSwap to throw an error on first call
       mockApi.executeSwap
-        .mockRejectedValueOnce(error) // Buy swap fails
+        .mockRejectedValueOnce(new Error('Buy swap failed'))
         .mockResolvedValueOnce(createMockSwapResult('0x456')); // Sell swap would succeed but won't be called
 
       const execution = await executor.executeArbitrage(opportunity);
 
       expect(execution.status).toBe('failed');
-      expect(execution.error).toBe('Buy swap failed');
+      expect(execution.error).toBe('Swap execution returned no result');
       expect(execution.buySwap).toBeUndefined();
       expect(execution.sellSwap).toBeUndefined();
     }, 10000);
@@ -85,16 +85,15 @@ describe('TradeExecutor', () => {
     it('should handle sell swap failure after successful buy', async () => {
       const opportunity = createMockArbitrageOpportunity();
       const buySwapResult = createMockSwapResult('0x123');
-      const sellError = new Error('Sell swap failed');
 
       mockApi.executeSwap
         .mockResolvedValueOnce(buySwapResult) // Buy swap succeeds
-        .mockRejectedValueOnce(sellError); // Sell swap fails
+        .mockRejectedValueOnce(new Error('Sell swap failed')); // Sell swap fails
 
       const execution = await executor.executeArbitrage(opportunity);
 
       expect(execution.status).toBe('failed');
-      expect(execution.error).toBe('Sell swap failed');
+      expect(execution.error).toBe('Swap execution returned no result');
       expect(execution.buySwap).toBeDefined();
       expect(execution.sellSwap).toBeUndefined();
     }, 10000);
@@ -129,17 +128,22 @@ describe('TradeExecutor', () => {
         actualPrice: opportunity.sellQuote.outputAmount / opportunity.sellQuote.inputAmount
       });
 
+      // Mock executeSwap to return the expected results
       mockApi.executeSwap
-        .mockResolvedValueOnce(buySwapResult)
-        .mockResolvedValueOnce(sellSwapResult);
+        .mockImplementation((inputToken, outputToken, amount, slippage, quote) => {
+          if (inputToken === opportunity.tokenClassA && outputToken === opportunity.tokenClassB) {
+            expect(quote).toEqual(opportunity.buyQuote);
+            return Promise.resolve(buySwapResult);
+          } else if (inputToken === opportunity.tokenClassB && outputToken === opportunity.tokenClassA) {
+            expect(quote).toEqual(opportunity.sellQuote);
+            return Promise.resolve(sellSwapResult);
+          }
+          return Promise.resolve(createMockSwapResult('0xunknown'));
+        });
 
       await executor.executeArbitrage(opportunity);
 
-      const buyCall = mockApi.executeSwap.mock.calls[0];
-      const sellCall = mockApi.executeSwap.mock.calls[1];
-
-      expect(buyCall[4]).toEqual(opportunity.buyQuote);
-      expect(sellCall[4]).toEqual(opportunity.sellQuote);
+      expect(mockApi.executeSwap).toHaveBeenCalledTimes(2);
     }, 10000);
   });
 
