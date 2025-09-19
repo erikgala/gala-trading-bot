@@ -1,10 +1,12 @@
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
+import { SchemaRegistry } from '@kafkajs/confluent-schema-registry';
 import { BlockData, KafkaConfig, EventProcessor } from './types';
 
 export class KafkaBlockConsumer {
   private kafka: Kafka;
   private consumer: Consumer;
   private eventProcessor: EventProcessor;
+  private schemaRegistry: SchemaRegistry;
   private isRunning: boolean = false;
   private topic: string;
 
@@ -26,6 +28,15 @@ export class KafkaBlockConsumer {
         initialRetryTime: 100,
         retries: 8
       }
+    });
+
+    // Initialize schema registry
+    this.schemaRegistry = new SchemaRegistry({
+      host: config.schemaHost,
+      auth: {
+        username: config.schemaUsername,
+        password: config.schemaPassword,
+      },
     });
 
     this.consumer = this.kafka.consumer({ 
@@ -91,16 +102,22 @@ export class KafkaBlockConsumer {
   }
 
   /**
-   * Deserialize message value with JSON fallback
+   * Deserialize message value using Avro schema registry with JSON fallback
    */
-  private deserializeMessageValue(buffer: Buffer): any {
+  private async deserializeMessageValue(buffer: Buffer): Promise<any> {
     try {
-      // Try to parse as JSON first
-      const jsonString = buffer.toString('utf8');
-      return JSON.parse(jsonString);
+      // Try to decode using Avro schema registry first
+      const decoded = await this.schemaRegistry.decode(buffer);
+      return decoded;
     } catch (e) {
-      // If not JSON, return the buffer for custom parsing
-      return buffer;
+      // Fallback to JSON parsing if Avro decoding fails
+      try {
+        const jsonString = buffer.toString('utf8');
+        return JSON.parse(jsonString);
+      } catch (jsonError) {
+        console.warn('⚠️  Failed to decode message with both Avro and JSON:', e);
+        return null;
+      }
     }
   }
 
@@ -116,26 +133,15 @@ export class KafkaBlockConsumer {
         return;
       }
 
-      let messageData: any = null;
-
-      // Try to deserialize the message value
-      const deserializedValue = this.deserializeMessageValue(message.value);
-      
-      if (typeof deserializedValue === 'object' && !Buffer.isBuffer(deserializedValue)) {
-        // Successfully deserialized as JSON
-        messageData = deserializedValue;
-      } else {
-        // Still binary data, need custom decoding
-        messageData = this.decodeMessageValue(deserializedValue);
-      }
+      // Try to deserialize the message value using Avro schema registry
+      const messageData = await this.deserializeMessageValue(message.value);
       
       if (!messageData) {
         console.warn('⚠️  Failed to decode message value');
         return;
       }
       
-      // Process all messages as block data for now
-      // TODO: Update based on actual message structure
+      // Process the decoded message as block data
       await this.processBlockMessage(messageData);
 
     } catch (error) {
@@ -158,7 +164,8 @@ export class KafkaBlockConsumer {
         return;
       }
 
-      // Parse the real block data structure
+      // The Avro schema should provide a clean, structured block data object
+      // No need for complex parsing - the schema registry handles the decoding
       const blockData: BlockData = {
         blockNumber: data.blockNumber || '0',
         channelName: data.channelName || '',
@@ -193,132 +200,6 @@ export class KafkaBlockConsumer {
     };
   }
 
-  /**
-   * Decode binary message value to extract block data
-   */
-  private decodeMessageValue(value: Buffer): any | null {
-    try {
-      // Convert Uint8Array to Buffer if needed
-      const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
-      
-      // The message appears to be protobuf-encoded binary data
-      // Based on the user's example, it contains structured data that needs to be parsed
-      const dataString = buffer.toString('utf8');
-      
-      // Extract block number (appears to be the first number in the string)
-      const blockNumberMatch = dataString.match(/^(\d+)/);
-      const blockNumber = blockNumberMatch ? blockNumberMatch[1] : 'unknown';
-      
-      // Extract channel name
-      const channelNameMatch = dataString.match(/asset-channel/);
-      const channelName = channelNameMatch ? 'asset-channel' : 'unknown';
-      
-      // Extract timestamp (ISO format)
-      const timestampMatch = dataString.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/);
-      const createdAt = timestampMatch ? timestampMatch[1] : new Date().toISOString();
-      
-      // Extract transaction ID (appears after the creator info)
-      const transactionIdMatch = dataString.match(/([a-f0-9]{64})/);
-      const transactionId = transactionIdMatch ? transactionIdMatch[0] : '';
-      
-      // Extract creator info
-      const creatorMatch = dataString.match(/GalaUsersOrg\s+Client\|galausers/);
-      const creator = creatorMatch ? {
-        mspId: 'GalaUsersOrg',
-        name: 'Client|galausers'
-      } : { mspId: '', name: '' };
-      
-      // Extract transaction type
-      const typeMatch = dataString.match(/ENDORSER_TRANSACTION/);
-      const type = typeMatch ? 'ENDORSER_TRANSACTION' : 'UNKNOWN';
-      
-      // Extract validation status
-      const validationMatch = dataString.match(/VALID/);
-      const validationCode = validationMatch ? {
-        transactionId: transactionId,
-        validationCode: 0,
-        validationEnum: 'VALID'
-      } : {
-        transactionId: transactionId,
-        validationCode: 1,
-        validationEnum: 'INVALID'
-      };
-      
-      // Extract JSON payload from the swap operation
-      const jsonPayloadMatch = dataString.match(/\{"Data":\[.*?\],"Status":\d+\}/);
-      let chaincodeResponse = null;
-      if (jsonPayloadMatch) {
-        try {
-          chaincodeResponse = JSON.parse(jsonPayloadMatch[0]);
-        } catch (e) {
-          console.warn('⚠️  Could not parse chaincode response JSON');
-        }
-      }
-      
-      // Extract the DexV3Contract:BatchSubmit JSON
-      const batchSubmitMatch = dataString.match(/\{"operations":\[.*?\],"uniqueKey":"[^"]+","signature":"[^"]+","trace":\{[^}]+\}\}/);
-      let batchSubmitData = null;
-      if (batchSubmitMatch) {
-        try {
-          batchSubmitData = JSON.parse(batchSubmitMatch[0]);
-        } catch (e) {
-          console.warn('⚠️  Could not parse batch submit JSON');
-        }
-      }
-      
-      // Construct the transaction
-      const transaction = {
-        id: transactionId,
-        creator: creator,
-        type: type,
-        validationCode: validationCode,
-        actions: [{
-          chaincodeResponse: chaincodeResponse ? {
-            status: 200,
-            message: '',
-            payload: JSON.stringify(chaincodeResponse)
-          } : {
-            status: 0,
-            message: '',
-            payload: ''
-          },
-          reads: [],
-          writes: [],
-          endorserMsps: ['CuratorOrg'],
-          args: batchSubmitData ? [
-            'DexV3Contract:BatchSubmit',
-            JSON.stringify(batchSubmitData)
-          ] : [],
-          chaincode: {
-            name: 'basic-asset',
-            version: '50527314'
-          }
-        }]
-      };
-      
-      // Construct the block data structure
-      const blockData = {
-        blockNumber: blockNumber,
-        channelName: channelName,
-        createdAt: createdAt,
-        isConfigurationBlock: false,
-        header: {
-          number: blockNumber,
-          previous_hash: '',
-          data_hash: ''
-        },
-        transactions: [transaction],
-        configtxs: []
-      };
-      
-      
-      return blockData;
-      
-    } catch (error) {
-      console.error('❌ Error decoding message value:', error);
-      return null;
-    }
-  }
 
   /**
    * Parse broker URLs from API URL

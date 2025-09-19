@@ -49,6 +49,17 @@ KAFKA_SCHEMA_PASSWORD=your_schema_password_here
 KAFKA_TOPIC=your_kafka_topic_here
 ```
 
+### Avro Schema Integration
+
+The consumer now uses Confluent Schema Registry for clean message parsing:
+
+- **Automatic decoding**: Messages are automatically decoded using the registered Avro schema
+- **Type safety**: Decoded messages maintain proper TypeScript types
+- **Fallback support**: Falls back to JSON parsing if Avro decoding fails
+- **Performance**: Much faster than regex-based parsing
+
+The schema registry handles the complex binary message format, providing clean, structured data objects that match the expected `BlockData` interface.
+
 ### Running the Streaming Bot
 
 ```bash
@@ -111,7 +122,7 @@ interface SwapEvent {
 
 ## Next Steps
 
-1. **Schema Update**: Replace placeholder types with real block data structure
+1. ✅ **Schema Integration**: Integrated Avro schema registry for clean message parsing
 2. **Arbitrage Logic**: Implement sophisticated real-time arbitrage detection
 3. **Performance Optimization**: Optimize for high-frequency processing
 4. **Cross-DEX Integration**: Add support for multiple DEXs
