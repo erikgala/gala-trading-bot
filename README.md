@@ -23,6 +23,7 @@ A sophisticated arbitrage trading bot for the GalaChain gSwap DEX built with Nod
    cd gala-trading-bot
    npm install
    ```
+   > The installation step sets up a Husky-powered Git pre-commit hook that runs `npm run build` and `npm test` before every commit. Re-run `npm run prepare` if you ever need to reinstall the hook manually.
 
 2. **Configure Environment**
    ```bash
