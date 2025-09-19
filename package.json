@@ -5,8 +5,10 @@
   "main": "dist/index.js",
   "scripts": {
     "start": "ts-node src/index.ts",
+    "streaming": "ts-node src/streamingBot.ts",
     "build": "tsc",
     "dev": "ts-node --watch src/index.ts",
+    "dev:streaming": "ts-node --watch src/streamingBot.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -17,6 +19,7 @@
     "@types/node": "^24.5.2",
     "axios": "^1.12.2",
     "dotenv": "^17.2.2",
+    "kafkajs": "^2.2.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   }
