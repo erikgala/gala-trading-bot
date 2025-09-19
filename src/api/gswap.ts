@@ -53,6 +53,21 @@ export interface SwapQuote {
   route: string[];
 }
 
+export interface QuoteCacheEntry {
+  quote: SwapQuote;
+  timestamp: number;
+}
+
+export type QuoteMap = Map<string, QuoteCacheEntry>;
+
+export function buildQuoteCacheKey(
+  inputTokenClass: string,
+  outputTokenClass: string,
+  inputAmount: number
+): string {
+  return `${inputTokenClass}::${outputTokenClass}::${inputAmount}`;
+}
+
 export interface SwapResult {
   transactionHash: string;
   inputAmount: number;
@@ -67,6 +82,7 @@ export class GSwapAPI {
   private signer: PrivateKeySigner;
   private availableTokens: TokenInfo[] = [];
   private tokensLoaded: boolean = false;
+  private latestQuoteMap: QuoteMap = new Map();
 
   constructor() {
     this.signer = new PrivateKeySigner(config.privateKey);
@@ -124,58 +140,6 @@ export class GSwapAPI {
   }
 
   /**
-   * Get token information from cached token list by token class key
-   */
-  async getTokenInfoByClassKey(tokenClassKey: string): Promise<TokenInfo | null> {
-    try {
-      // Ensure tokens are loaded
-      if (!this.tokensLoaded) {
-        await this.loadAvailableTokens();
-      }
-
-      // Find token in cached list by token class key
-      const token = this.availableTokens.find(t => 
-        t.tokenClass === tokenClassKey
-      );
-
-      return token || null;
-    } catch (error) {
-      console.error(`Failed to get token info for ${tokenClassKey}:`, error);
-      return null;
-    }
-  }
-
-  /**
-   * Get token information from cached token list by token data
-   */
-  async getTokenInfoByData(tokenData: { collection: string; category: string; type: string; additionalKey: string }): Promise<TokenInfo | null> {
-    const tokenClassKey = this.createTokenClassKey(tokenData);
-    return this.getTokenInfoByClassKey(tokenClassKey);
-  }
-
-  /**
-   * Get token information from cached token list by symbol (backward compatibility)
-   */
-  async getTokenInfo(symbol: string): Promise<TokenInfo | null> {
-    try {
-      // Ensure tokens are loaded
-      if (!this.tokensLoaded) {
-        await this.loadAvailableTokens();
-      }
-
-      // Find token in cached list by symbol (for backward compatibility)
-      const token = this.availableTokens.find(t => 
-        t.symbol.toUpperCase() === symbol.toUpperCase()
-      );
-
-      return token || null;
-    } catch (error) {
-      console.error(`Failed to get token info for ${symbol}:`, error);
-      return null;
-    }
-  }
-
-  /**
    * Get all available tokens from cached list
    */
   async getAvailableTokens(): Promise<TokenInfo[]> {
@@ -199,42 +163,80 @@ export class GSwapAPI {
     try {
       const tokens = await this.getAvailableTokens();
       const pairs: TradingPair[] = [];
+      const quoteMap: QuoteMap = new Map();
 
       // Find GALA token
       const galaToken = tokens.find(token => token.tokenClass === 'GALA|Unit|none|none');
       if (!galaToken) {
         console.warn('⚠️  GALA token not found in available tokens');
+        this.latestQuoteMap = quoteMap;
         return [];
       }
 
-      // Test GALA against all other tokens
-      for (const otherToken of tokens) {
-        if (otherToken.tokenClass === galaToken.tokenClass) continue; // Skip GALA-GALA pair
+      const tokensToCheck = tokens.filter(token => token.tokenClass !== galaToken.tokenClass);
+      const concurrencyLimit = Math.max(1, Math.min(5, tokensToCheck.length));
+      let index = 0;
 
-        // Test if we can get a quote in both directions
-        try {
-          const quoteAB = await this.getQuote(galaToken.tokenClass, otherToken.tokenClass, 1);
-          const quoteBA = await this.getQuote(otherToken.tokenClass, galaToken.tokenClass, 1);
-
-          if (quoteAB && quoteBA) {
-            pairs.push({
-              tokenA: galaToken,
-              tokenB: otherToken,
-              tokenClassA: galaToken.tokenClass,
-              tokenClassB: otherToken.tokenClass
-            });
+      const processNext = async (): Promise<void> => {
+        while (true) {
+          const currentIndex = index++;
+          if (currentIndex >= tokensToCheck.length) {
+            return;
           }
-        } catch (error) {
-          // Skip pairs that don't have liquidity
-          console.warn(`No liquidity for GALA <-> ${otherToken.symbol}`);
+
+          const otherToken = tokensToCheck[currentIndex];
+
+          try {
+            const [quoteAB, quoteBA] = await Promise.all([
+              this.getQuote(galaToken.tokenClass, otherToken.tokenClass, 1),
+              this.getQuote(otherToken.tokenClass, galaToken.tokenClass, 1)
+            ]);
+
+            const timestamp = Date.now();
+
+            if (quoteAB) {
+              quoteMap.set(
+                buildQuoteCacheKey(galaToken.tokenClass, otherToken.tokenClass, quoteAB.inputAmount),
+                { quote: quoteAB, timestamp }
+              );
+            }
+
+            if (quoteBA) {
+              quoteMap.set(
+                buildQuoteCacheKey(otherToken.tokenClass, galaToken.tokenClass, quoteBA.inputAmount),
+                { quote: quoteBA, timestamp }
+              );
+            }
+
+            if (quoteAB && quoteBA) {
+              pairs.push({
+                tokenA: galaToken,
+                tokenB: otherToken,
+                tokenClassA: galaToken.tokenClass,
+                tokenClassB: otherToken.tokenClass
+              });
+            } else {
+              console.warn(`No liquidity for GALA <-> ${otherToken.symbol}`);
+            }
+          } catch (error) {
+            console.warn(`Error fetching quotes for GALA <-> ${otherToken.symbol}:`, error);
+          }
         }
-      }
+      };
+
+      await Promise.all(Array.from({ length: concurrencyLimit }, () => processNext()));
+
+      this.latestQuoteMap = quoteMap;
 
       return pairs;
     } catch (error) {
       console.error('Failed to get trading pairs:', error);
       throw error;
     }
+  }
+
+  getLatestQuoteMap(): QuoteMap {
+    return new Map(this.latestQuoteMap);
   }
 
   /**
@@ -430,28 +432,6 @@ export class GSwapAPI {
   }
 
   /**
-   * Validate if a token is available on GalaSwap by token data
-   */
-  isTokenAvailableByData(tokenData: { collection: string; category: string; type: string; additionalKey: string }): boolean {
-    const tokenClassKey = this.createTokenClassKey(tokenData);
-    return this.isTokenAvailableByClassKey(tokenClassKey);
-  }
-
-  /**
-   * Validate if a token is available on GalaSwap (backward compatibility)
-   */
-  isTokenAvailable(tokenSymbol: string): boolean {
-    if (!this.tokensLoaded) {
-      console.warn('⚠️  Token list not loaded yet, cannot validate token');
-      return false;
-    }
-
-    return this.availableTokens.some(token => 
-      token.symbol.toUpperCase() === tokenSymbol.toUpperCase()
-    );
-  }
-
-  /**
    * Create token class key from block token data
    */
   createTokenClassKey(tokenData: { collection: string; category: string; type: string; additionalKey: string }): string {
@@ -461,19 +441,6 @@ export class GSwapAPI {
       type: tokenData.type,
       additionalKey: tokenData.additionalKey
     });
-  }
-
-  /**
-   * Get token info by token class key (for Kafka block validation)
-   */
-  getTokenByClassKey(tokenClassKey: string): TokenInfo | null {
-    if (!this.tokensLoaded) {
-      return null;
-    }
-
-    return this.availableTokens.find(token => 
-      token.tokenClass === tokenClassKey
-    ) || null;
   }
 
   /**

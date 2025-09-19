@@ -1,4 +1,4 @@
-import { GSwapAPI, TradingPair } from './api/gswap';
+import { GSwapAPI, TradingPair, QuoteMap } from './api/gswap';
 import { ArbitrageDetector, ArbitrageOpportunity } from './strategies/arbitrage';
 import { TradeExecutor } from './trader/executor';
 import { MockTradeExecutor } from './mock/mockTradeExecutor';
@@ -112,11 +112,11 @@ class GalaTradingBot {
 
     try {
       // Step 1: Fetch market data
-      const pairs = await this.fetchMarketData();
+      const { pairs, quoteMap } = await this.fetchMarketData();
       console.log(`📊 Fetched ${pairs.length} trading pairs`);
 
       // Step 2: Detect arbitrage opportunities
-      const opportunities = await this.detector.detectAllOpportunities(pairs, this.api);
+      const opportunities = await this.detector.detectAllOpportunities(pairs, this.api, quoteMap);
       console.log(`🔍 Found ${opportunities.length} arbitrage opportunities`);
 
       // Step 2.5: Check for opportunities without sufficient funds
@@ -138,11 +138,12 @@ class GalaTradingBot {
     }
   }
 
-  private async fetchMarketData(): Promise<TradingPair[]> {
+  private async fetchMarketData(): Promise<{ pairs: TradingPair[]; quoteMap: QuoteMap }> {
     try {
       // Fetch trading pairs from gSwap
       const pairs = await this.api.getTradingPairs();
-      return pairs;
+      const quoteMap = this.api.getLatestQuoteMap();
+      return { pairs, quoteMap };
     } catch (error) {
       console.error('❌ Failed to fetch market data:', error);
       throw error;
