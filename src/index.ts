@@ -1,14 +1,12 @@
 import { GSwapAPI, TradingPair, QuoteMap } from './api/gswap';
 import { ArbitrageDetector, ArbitrageOpportunity } from './strategies/arbitrage';
 import { TradeExecutor } from './trader/executor';
-import { MockTradeExecutor } from './mock/mockTradeExecutor';
 import { config, validateConfig } from './config';
 
 class GalaTradingBot {
   private api: GSwapAPI;
   private detector: ArbitrageDetector;
   private executor: TradeExecutor;
-  private mockExecutor: MockTradeExecutor;
   private isRunning: boolean = false;
   private pollingInterval?: NodeJS.Timeout;
 
@@ -16,7 +14,6 @@ class GalaTradingBot {
     this.api = new GSwapAPI();
     this.detector = new ArbitrageDetector();
     this.executor = new TradeExecutor(this.api);
-    this.mockExecutor = new MockTradeExecutor();
   }
 
   async start(): Promise<void> {
@@ -43,7 +40,7 @@ class GalaTradingBot {
       if (config.mockMode) {
         console.log('🎭 Mock mode enabled - trades will be simulated');
         console.log(`📁 Mock run name: ${config.mockRunName}`);
-        console.log(`💰 Initial balances:`, this.mockExecutor.getBalances());
+        console.log('💰 Initial balances:', config.mockWalletBalances);
       }
 
     } catch (error) {
@@ -59,11 +56,6 @@ class GalaTradingBot {
     
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
-    }
-
-    // Generate mock trading report if in mock mode
-    if (config.mockMode) {
-      this.mockExecutor.generateFinalReport();
     }
 
     // Cancel all active trades
@@ -152,74 +144,37 @@ class GalaTradingBot {
 
 
   private async executeOpportunities(opportunities: ArbitrageOpportunity[]): Promise<void> {
-    if (config.mockMode) {
-      // Mock mode execution
-      const executableOpportunities = opportunities.filter(opp => opp.hasFunds);
-      
-      if (executableOpportunities.length === 0) {
-        console.log('⏳ No executable opportunities (insufficient funds for all opportunities)');
-        return;
-      }
+    const capacity = this.executor.getTradingCapacity();
 
-      // Execute the most profitable opportunities (limit to 3 for mock mode)
-      const opportunitiesToExecute = executableOpportunities.slice(0, 3);
-      
-      for (const opportunity of opportunitiesToExecute) {
-        try {
-          console.log(`\n💰 Executing mock opportunity: ${opportunity.tokenA} -> ${opportunity.tokenB}`);
-          console.log(`   Buy: ${opportunity.tokenClassA} @ ${opportunity.buyPrice.toFixed(6)}`);
-          console.log(`   Sell: ${opportunity.tokenClassB} @ ${opportunity.sellPrice.toFixed(6)}`);
-          console.log(`   Expected profit: ${opportunity.profitPercentage.toFixed(2)}%`);
-          console.log(`   Trade amount: ${opportunity.maxTradeAmount}`);
-          console.log(`   Balance: ${opportunity.currentBalance.toFixed(2)} ${opportunity.tokenClassA.split('|')[0]}`);
-          
-          // Execute mock trade
-          const success = await this.mockExecutor.executeArbitrageTrade(opportunity);
-          if (success) {
-            console.log(`✅ Mock trade executed successfully`);
-          }
-          
-        } catch (error) {
-          console.error(`❌ Error executing mock opportunity ${opportunity.id}:`, error);
-        }
-      }
-    } else {
-      // Real mode execution
-      const capacity = this.executor.getTradingCapacity();
-      
-      if (capacity.available <= 0) {
-        console.log(`⏳ No available slots for new trades (${capacity.current}/${capacity.max})`);
-        return;
-      }
+    if (capacity.available <= 0) {
+      console.log(`⏳ No available slots for new trades (${capacity.current}/${capacity.max})`);
+      return;
+    }
 
-      // Filter opportunities that have sufficient funds
-      const executableOpportunities = opportunities.filter(opp => opp.hasFunds);
-      
-      if (executableOpportunities.length === 0) {
-        console.log('⏳ No executable opportunities (insufficient funds for all opportunities)');
-        return;
-      }
+    const executableOpportunities = opportunities.filter(opp => opp.hasFunds);
 
-      // Execute the most profitable opportunities with sufficient funds
-      const opportunitiesToExecute = executableOpportunities.slice(0, capacity.available);
-      
-      for (const opportunity of opportunitiesToExecute) {
-        try {
-          console.log(`\n💰 Executing opportunity: ${opportunity.tokenA} -> ${opportunity.tokenB}`);
-          console.log(`   Buy: ${opportunity.tokenClassA} @ ${opportunity.buyPrice.toFixed(6)}`);
-          console.log(`   Sell: ${opportunity.tokenClassB} @ ${opportunity.sellPrice.toFixed(6)}`);
-          console.log(`   Expected profit: ${opportunity.profitPercentage.toFixed(2)}%`);
-          console.log(`   Trade amount: ${opportunity.maxTradeAmount}`);
-          console.log(`   Balance: ${opportunity.currentBalance.toFixed(2)} ${opportunity.tokenClassA.split('|')[0]}`);
-          
-          // Execute in background to avoid blocking
-          this.executor.executeArbitrage(opportunity).catch(error => {
-            console.error(`❌ Failed to execute opportunity ${opportunity.id}:`, error);
-          });
-          
-        } catch (error) {
-          console.error(`❌ Error executing opportunity ${opportunity.id}:`, error);
-        }
+    if (executableOpportunities.length === 0) {
+      console.log('⏳ No executable opportunities (insufficient funds for all opportunities)');
+      return;
+    }
+
+    const opportunitiesToExecute = executableOpportunities.slice(0, capacity.available);
+
+    for (const opportunity of opportunitiesToExecute) {
+      try {
+        console.log(`\n💰 Executing opportunity: ${opportunity.tokenA} -> ${opportunity.tokenB}`);
+        console.log(`   Buy: ${opportunity.tokenClassA} @ ${opportunity.buyPrice.toFixed(6)}`);
+        console.log(`   Sell: ${opportunity.tokenClassB} @ ${opportunity.sellPrice.toFixed(6)}`);
+        console.log(`   Expected profit: ${opportunity.profitPercentage.toFixed(2)}%`);
+        console.log(`   Trade amount: ${opportunity.maxTradeAmount}`);
+        console.log(`   Balance: ${opportunity.currentBalance.toFixed(2)} ${opportunity.tokenClassA.split('|')[0]}`);
+
+        this.executor.executeArbitrage(opportunity).catch(error => {
+          console.error(`❌ Failed to execute opportunity ${opportunity.id}:`, error);
+        });
+
+      } catch (error) {
+        console.error(`❌ Error executing opportunity ${opportunity.id}:`, error);
       }
     }
   }
@@ -250,43 +205,23 @@ class GalaTradingBot {
   }
 
   private logTradingStats(): void {
-    if (config.mockMode) {
-      // Mock mode statistics
-      const mockStats = this.mockExecutor.getStats();
-      const balances = this.mockExecutor.getBalances();
-      
-      console.log('\n🎭 Mock Trading Statistics:');
-      console.log(`   Total transactions: ${mockStats.totalTransactions}`);
-      console.log(`   Arbitrage trades: ${mockStats.arbitrageTrades}`);
-      console.log(`   Swap trades: ${mockStats.swapTrades}`);
-      console.log(`   Total profit: ${mockStats.totalProfit.toFixed(6)}`);
-      console.log(`   Success rate: ${mockStats.successRate.toFixed(2)}%`);
-      
-      console.log('\n💰 Current Balances:');
-      Object.entries(balances).forEach(([token, balance]) => {
-        const symbol = token.split('|')[0];
-        console.log(`   ${symbol}: ${balance.toFixed(6)}`);
+    const stats = this.executor.getTradingStats();
+    const activeTrades = this.executor.getActiveTrades();
+
+    console.log('\n📊 Trading Statistics:');
+    console.log(`   Total trades: ${stats.totalTrades}`);
+    console.log(`   Completed: ${stats.completedTrades}`);
+    console.log(`   Failed: ${stats.failedTrades}`);
+    console.log(`   Success rate: ${stats.successRate.toFixed(1)}%`);
+    console.log(`   Total profit: ${stats.totalProfit.toFixed(2)}`);
+    console.log(`   Average profit: ${stats.averageProfit.toFixed(2)}`);
+    console.log(`   Active trades: ${activeTrades.length}`);
+
+    if (activeTrades.length > 0) {
+      console.log('   Active trade statuses:');
+      activeTrades.forEach(trade => {
+        console.log(`     ${trade.id}: ${trade.status} (${trade.opportunity.tokenA} -> ${trade.opportunity.tokenB})`);
       });
-    } else {
-      // Real mode statistics
-      const stats = this.executor.getTradingStats();
-      const activeTrades = this.executor.getActiveTrades();
-      
-      console.log('\n📊 Trading Statistics:');
-      console.log(`   Total trades: ${stats.totalTrades}`);
-      console.log(`   Completed: ${stats.completedTrades}`);
-      console.log(`   Failed: ${stats.failedTrades}`);
-      console.log(`   Success rate: ${stats.successRate.toFixed(1)}%`);
-      console.log(`   Total profit: ${stats.totalProfit.toFixed(2)}`);
-      console.log(`   Average profit: ${stats.averageProfit.toFixed(2)}`);
-      console.log(`   Active trades: ${activeTrades.length}`);
-      
-      if (activeTrades.length > 0) {
-        console.log('   Active trade statuses:');
-        activeTrades.forEach(trade => {
-          console.log(`     ${trade.id}: ${trade.status} (${trade.opportunity.tokenA} -> ${trade.opportunity.tokenB})`);
-        });
-      }
     }
   }
 }
