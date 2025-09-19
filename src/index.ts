@@ -105,6 +105,9 @@ class GalaTradingBot {
       const opportunities = await this.detector.detectAllOpportunities(pairs, this.api);
       console.log(`🔍 Found ${opportunities.length} arbitrage opportunities`);
 
+      // Step 2.5: Check for opportunities without sufficient funds
+      this.checkFundWarnings(opportunities);
+
       // Step 3: Execute profitable opportunities
       if (opportunities.length > 0) {
         await this.executeOpportunities(opportunities);
@@ -141,8 +144,16 @@ class GalaTradingBot {
       return;
     }
 
-    // Execute the most profitable opportunities
-    const opportunitiesToExecute = opportunities.slice(0, capacity.available);
+    // Filter opportunities that have sufficient funds
+    const executableOpportunities = opportunities.filter(opp => opp.hasFunds);
+    
+    if (executableOpportunities.length === 0) {
+      console.log('⏳ No executable opportunities (insufficient funds for all opportunities)');
+      return;
+    }
+
+    // Execute the most profitable opportunities with sufficient funds
+    const opportunitiesToExecute = executableOpportunities.slice(0, capacity.available);
     
     for (const opportunity of opportunitiesToExecute) {
       try {
@@ -151,6 +162,7 @@ class GalaTradingBot {
         console.log(`   Sell: ${opportunity.tokenClassB} @ ${opportunity.sellPrice.toFixed(6)}`);
         console.log(`   Expected profit: ${opportunity.profitPercentage.toFixed(2)}%`);
         console.log(`   Trade amount: ${opportunity.maxTradeAmount}`);
+        console.log(`   Balance: ${opportunity.currentBalance.toFixed(2)} ${opportunity.tokenClassA.split('|')[0]}`);
         
         // Execute in background to avoid blocking
         this.executor.executeArbitrage(opportunity).catch(error => {
@@ -160,6 +172,31 @@ class GalaTradingBot {
       } catch (error) {
         console.error(`❌ Error executing opportunity ${opportunity.id}:`, error);
       }
+    }
+  }
+
+  private checkFundWarnings(opportunities: ArbitrageOpportunity[]): void {
+    const opportunitiesWithoutFunds = opportunities.filter(opp => !opp.hasFunds);
+    
+    if (opportunitiesWithoutFunds.length > 0) {
+      console.log('\n⚠️  FUND WARNING: Opportunities found but insufficient funds!');
+      console.log('   The following opportunities cannot be executed due to insufficient balance:');
+      
+      opportunitiesWithoutFunds.forEach(opp => {
+        const tokenSymbol = opp.tokenClassA.split('|')[0];
+        console.log(`   💰 ${opp.tokenA} -> ${opp.tokenB}: ${opp.profitPercentage.toFixed(2)}% profit`);
+        console.log(`      Required: ${opp.maxTradeAmount.toFixed(2)} ${tokenSymbol}`);
+        console.log(`      Available: ${opp.currentBalance.toFixed(2)} ${tokenSymbol}`);
+        console.log(`      Shortfall: ${opp.shortfall.toFixed(2)} ${tokenSymbol}`);
+        console.log(`      Potential profit: ${opp.estimatedProfit.toFixed(2)}`);
+        console.log('');
+      });
+      
+      console.log('   💡 To execute these trades, you need to:');
+      console.log('      1. Add more tokens to your wallet');
+      console.log('      2. Reduce MAX_TRADE_AMOUNT in your configuration');
+      console.log('      3. Wait for smaller opportunities that match your balance');
+      console.log('');
     }
   }
 

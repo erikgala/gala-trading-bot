@@ -285,13 +285,44 @@ export class GSwapAPI {
    */
   async getTokenBalance(tokenClass: string): Promise<number> {
     try {
-      // This would need to be implemented based on the SDK's balance checking methods
-      // For now, return a placeholder
-      console.warn('getTokenBalance not implemented - returning 0');
+      // Extract token symbol from token class (e.g., "GALA|Unit|none|none" -> "GALA")
+      const tokenSymbol = tokenClass.split('|')[0];
+      
+      // For now, we'll implement a simple balance check
+      // In a real implementation, you'd use the SDK's balance checking methods
+      // This is a placeholder that returns 0 to simulate no balance
+      console.warn(`Balance check for ${tokenSymbol} not fully implemented - returning 0`);
       return 0;
     } catch (error) {
       console.error(`Failed to get balance for ${tokenClass}:`, error);
       return 0;
+    }
+  }
+
+  /**
+   * Check if wallet has sufficient balance for trading
+   */
+  async checkTradingFunds(requiredAmount: number, tokenClass: string): Promise<{
+    hasFunds: boolean;
+    currentBalance: number;
+    shortfall: number;
+  }> {
+    try {
+      const currentBalance = await this.getTokenBalance(tokenClass);
+      const shortfall = Math.max(0, requiredAmount - currentBalance);
+      
+      return {
+        hasFunds: currentBalance >= requiredAmount,
+        currentBalance,
+        shortfall
+      };
+    } catch (error) {
+      console.error(`Failed to check trading funds for ${tokenClass}:`, error);
+      return {
+        hasFunds: false,
+        currentBalance: 0,
+        shortfall: requiredAmount
+      };
     }
   }
 

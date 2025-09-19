@@ -14,6 +14,9 @@ export interface ArbitrageOpportunity {
   maxTradeAmount: number;
   buyQuote: SwapQuote;
   sellQuote: SwapQuote;
+  hasFunds: boolean;
+  currentBalance: number;
+  shortfall: number;
   timestamp: number;
 }
 
@@ -114,7 +117,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
       if (rateA1 > 0 && rateB2 > 0) {
         const profitPercentage = ((rateA1 - rateB2) / rateB2) * 100;
         if (profitPercentage > config.minProfitThreshold) {
-          const opportunity = this.createOpportunity(
+          const opportunity = await this.createOpportunity(
             pairA, pairB, commonToken,
             rateA1, rateB2, profitPercentage,
             quoteA1, quoteB2, api
@@ -129,7 +132,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
       if (rateB1 > 0 && rateA2 > 0) {
         const profitPercentage = ((rateB1 - rateA2) / rateA2) * 100;
         if (profitPercentage > config.minProfitThreshold) {
-          const opportunity = this.createOpportunity(
+          const opportunity = await this.createOpportunity(
             pairB, pairA, commonToken,
             rateB1, rateA2, profitPercentage,
             quoteB1, quoteA2, api
@@ -160,7 +163,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
     return null;
   }
 
-  private createOpportunity(
+  private async createOpportunity(
     buyPair: TradingPair,
     sellPair: TradingPair,
     commonToken: string,
@@ -170,7 +173,7 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
     buyQuote: SwapQuote,
     sellQuote: SwapQuote,
     api: GSwapAPI
-  ): ArbitrageOpportunity | null {
+  ): Promise<ArbitrageOpportunity | null> {
     try {
       // Calculate maximum trade amount based on available liquidity
       const maxTradeAmount = Math.min(
@@ -182,6 +185,9 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
       if (maxTradeAmount <= 0) return null;
 
       const estimatedProfit = (sellRate - buyRate) * maxTradeAmount;
+
+      // Check if we have sufficient funds for trading
+      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, buyPair.tokenClassA);
 
       return {
         id: `arb-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -196,6 +202,9 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
         maxTradeAmount,
         buyQuote,
         sellQuote,
+        hasFunds: fundsCheck.hasFunds,
+        currentBalance: fundsCheck.currentBalance,
+        shortfall: fundsCheck.shortfall,
         timestamp: Date.now()
       };
     } catch (error) {
@@ -259,6 +268,9 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
 
       if (maxTradeAmount <= 0) return null;
 
+      // Check if we have sufficient funds for trading
+      const fundsCheck = await api.checkTradingFunds(maxTradeAmount, pair.tokenClassA);
+
       return {
         id: `direct-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         tokenA: pair.tokenA.symbol,
@@ -272,6 +284,9 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
         maxTradeAmount,
         buyQuote: quoteBA,
         sellQuote: quoteAB,
+        hasFunds: fundsCheck.hasFunds,
+        currentBalance: fundsCheck.currentBalance,
+        shortfall: fundsCheck.shortfall,
         timestamp: Date.now()
       };
     } catch (error) {
