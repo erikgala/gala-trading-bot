@@ -4,7 +4,6 @@ import { BalanceManager, BalanceSnapshot } from './balanceManager';
 import { buildQuoteCacheKey, cloneQuoteMap } from './quotes';
 import { createTokenClassKey, TokenRegistry } from './tokenRegistry';
 import type {
-  QuoteCacheEntry,
   QuoteMap,
   SwapQuote,
   SwapResult,
@@ -25,6 +24,7 @@ export class GSwapAPI {
   private readonly balanceManager: BalanceManager;
   private readonly isMockMode: boolean;
   private latestQuoteMap: QuoteMap = new Map();
+  private noPoolAvailableCache: Set<string> = new Set();
 
   constructor() {
     this.signer = new PrivateKeySigner(config.privateKey);
@@ -164,6 +164,11 @@ export class GSwapAPI {
     inputAmount: number,
   ): Promise<SwapQuote | null> {
     try {
+      const key = `${inputTokenClass}-${outputTokenClass}`;
+      if(this.noPoolAvailableCache.has(key)) {
+        return null;
+      }
+
       const quote = await this.gSwap.quoting.quoteExactInput(
         inputTokenClass,
         outputTokenClass,
@@ -179,7 +184,11 @@ export class GSwapAPI {
         feeTier: quote.feeTier,
         route: [],
       };
-    } catch (error) {
+    } catch (error: any) {
+      if(error.code === "NO_POOL_AVAILABLE") {
+        const key = `${inputTokenClass}-${outputTokenClass}`;
+        this.noPoolAvailableCache.add(key);
+      }
       console.error(`Failed to get quote for ${inputTokenClass} -> ${outputTokenClass}:`, error);
       return null;
     }
@@ -370,6 +379,6 @@ export class GSwapAPI {
       return { tokens: [] };
     }
 
-    return await this.gSwap.assets.getUserAssets(config.walletAddress, 1, 100) as UserAssetsResponse;
+    return await this.gSwap.assets.getUserAssets(config.walletAddress, 1, 20) as UserAssetsResponse;
   }
 }

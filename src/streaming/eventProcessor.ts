@@ -1,6 +1,9 @@
 import { BlockData, TransactionData, EventProcessor, ActionData, DexV3BatchSubmit } from './types';
 import { ArbitrageDetector, ArbitrageOpportunity } from '../strategies/arbitrage';
 import { GSwapAPI } from '../api/gswap';
+import { TradeExecutor } from '../trader/executor';
+import { MockTradeExecutor } from '../mock/mockTradeExecutor';
+import { config } from '../config';
 
 export class RealTimeEventProcessor implements EventProcessor {
   private processedBlocks: Set<number> = new Set();
@@ -10,10 +13,14 @@ export class RealTimeEventProcessor implements EventProcessor {
   private tradesExecuted: number = 0;
   private arbitrageDetector: ArbitrageDetector;
   private api: GSwapAPI;
+  private tradeExecutor: TradeExecutor;
+  private mockTradeExecutor: MockTradeExecutor;
 
   constructor(api: GSwapAPI) {
     this.api = api;
     this.arbitrageDetector = new ArbitrageDetector();
+    this.tradeExecutor = new TradeExecutor(api);
+    this.mockTradeExecutor = new MockTradeExecutor();
   }
 
   /**
@@ -129,15 +136,6 @@ export class RealTimeEventProcessor implements EventProcessor {
       // Calculate current price from swap amounts (more accurate than sqrtPriceLimit)
       const currentPrice = this.calculatePriceFromSwapAmounts(swapData);
 
-      // Log the incoming swap that triggered arbitrage analysis
-      console.log(`🔄 SWAP DETECTED - Triggering Arbitrage Analysis`);
-      console.log(`   Swap Pair: ${swapData.tokenIn.collection} -> ${swapData.tokenOut.collection}`);
-      console.log(`   Amount In: ${swapData.amountIn}`);
-      console.log(`   Amount In Maximum: ${swapData.amountInMaximum}`);
-      console.log(`   Fee: ${swapData.fee}`);
-      console.log(`   Current Price: ${currentPrice.toFixed(6)}`);
-      console.log(`   Transaction ID: ${swapData.uniqueId}`);
-
       // Analyze for arbitrage opportunities using the sophisticated strategies
       const arbitrageOpportunities = await this.detectArbitrageOpportunities(swapData, currentPrice);
       
@@ -189,12 +187,8 @@ export class RealTimeEventProcessor implements EventProcessor {
         // This is an approximation - in reality we'd need the actual amountOut
         // But amountInMaximum gives us the maximum input, so we can estimate
         const estimatedPrice = amountInMaximum / amountIn;
-        console.log(`   Debug: amountIn = ${amountIn}, amountInMaximum = ${amountInMaximum}, estimated price = ${estimatedPrice}`);
         return estimatedPrice;
       }
-      
-      // Fallback: return 0 for now (we'll improve this later)
-      console.log(`   Debug: No valid amounts, using fallback price = 0`);
       return 0;
     } catch (error) {
       console.warn('⚠️  Error calculating price from swap amounts:', error);
@@ -210,14 +204,11 @@ export class RealTimeEventProcessor implements EventProcessor {
   private calculatePriceFromSqrtPriceLimit(sqrtPriceLimit: string): number {
     try {
       const sqrtPrice = parseFloat(sqrtPriceLimit);
-      console.log(`   Debug: sqrtPriceLimit = "${sqrtPriceLimit}", parsed = ${sqrtPrice}`);
-      
       // Price = (sqrtPrice / 2^96)^2
       // For Uniswap V3, sqrtPrice is stored as Q64.96 fixed point
       const Q64_96 = Math.pow(2, 96);
       const price = Math.pow(sqrtPrice / Q64_96, 2);
-      
-      console.log(`   Debug: Q64_96 = ${Q64_96}, calculated price = ${price}`);
+  
       return price;
     } catch (error) {
       console.warn('⚠️  Error calculating price from sqrtPriceLimit:', error);
@@ -308,14 +299,39 @@ export class RealTimeEventProcessor implements EventProcessor {
       console.log(`   Amount: ${opportunity.maxTradeAmount}`);
       console.log(`   Expected Profit: ${opportunity.profitPercentage.toFixed(2)}%`);
       
-      // TODO: Implement actual trade execution
-      // This would integrate with the TradeExecutor
+      let success = false;
       
-      // Simulate trade execution
-      this.tradesExecuted++;
-      console.log(`✅ Arbitrage trade executed successfully (#${this.tradesExecuted})`);
-      console.log(`   Profit: ${opportunity.profitPercentage.toFixed(2)}%`);
-      console.log(`   Transaction Hash: mock_tx_hash_${Date.now()}`);
+      if (config.mockMode) {
+        // Execute mock trade
+        console.log('🎭 Executing mock arbitrage trade...');
+        success = await this.mockTradeExecutor.executeArbitrageTrade(opportunity);
+      } else {
+        // Execute real trade
+        console.log('💰 Executing real arbitrage trade...');
+        const execution = await this.tradeExecutor.executeArbitrage(opportunity);
+        
+        if (execution.status === 'completed') {
+          success = true;
+          console.log(`✅ Real arbitrage trade completed successfully`);
+          console.log(`   Execution ID: ${execution.id}`);
+          console.log(`   Actual Profit: ${execution.actualProfit?.toFixed(2) || 'N/A'}`);
+          console.log(`   Buy Transaction: ${execution.buySwap?.transactionHash || 'N/A'}`);
+          console.log(`   Sell Transaction: ${execution.sellSwap?.transactionHash || 'N/A'}`);
+        } else {
+          console.log(`❌ Real arbitrage trade failed: ${execution.status}`);
+          if (execution.error) {
+            console.log(`   Error: ${execution.error}`);
+          }
+        }
+      }
+      
+      if (success) {
+        this.tradesExecuted++;
+        console.log(`✅ Arbitrage trade executed successfully (#${this.tradesExecuted})`);
+        console.log(`   Profit: ${opportunity.profitPercentage.toFixed(2)}%`);
+      } else {
+        console.log(`❌ Arbitrage trade execution failed`);
+      }
       
     } catch (error) {
       console.error('❌ Error executing arbitrage trade:', error);
@@ -330,13 +346,36 @@ export class RealTimeEventProcessor implements EventProcessor {
     blocksFiltered: number;
     opportunitiesFound: number;
     tradesExecuted: number;
+    mockStats?: any;
   } {
-    return {
+    const stats: {
+      blocksProcessed: number;
+      blocksFiltered: number;
+      opportunitiesFound: number;
+      tradesExecuted: number;
+      mockStats?: any;
+    } = {
       blocksProcessed: this.processedBlocks.size,
       blocksFiltered: this.filteredBlocks,
       opportunitiesFound: this.opportunitiesFound,
       tradesExecuted: this.tradesExecuted,
     };
+
+    // Add mock statistics if in mock mode
+    if (config.mockMode) {
+      stats.mockStats = this.mockTradeExecutor.getStats();
+    }
+
+    return stats;
+  }
+
+  /**
+   * Generate final mock report (for mock mode)
+   */
+  async generateMockReport(): Promise<void> {
+    if (config.mockMode) {
+      await this.mockTradeExecutor.generateFinalReport();
+    }
   }
 
   /**

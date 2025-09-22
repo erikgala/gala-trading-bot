@@ -102,13 +102,11 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
     // Get token class keys for the swap
     const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
     const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
-    
-    console.log(`   Analyzing cross-pair arbitrage for ${swapData.tokenIn.collection}/${swapData.tokenOut.collection}`);
+
     
     // Only analyze if GALA is involved
     const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
     if (tokenInClassKey !== GALA_TOKEN_CLASS && tokenOutClassKey !== GALA_TOKEN_CLASS) {
-      console.log(`   Skipping cross-pair analysis - no GALA token involved`);
       return opportunities;
     }
     
@@ -117,15 +115,11 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
     const galaToken = availableTokens.find(t => t.tokenClass === GALA_TOKEN_CLASS);
     
     if (!galaToken) {
-      console.log(`   GALA token not found in available tokens`);
       return opportunities;
     }
     
     // Find tokens that could form triangular arbitrage opportunities
     const relatedTokens = this.findRelatedTokensForArbitrage(swapData, availableTokens, api);
-    
-    console.log(`   Found ${relatedTokens.length} related tokens for triangular arbitrage`);
-    console.log(`   Related tokens: ${relatedTokens.map(t => t.symbol).join(', ')}`);
     
     // Analyze triangular arbitrage opportunities
     for (const relatedToken of relatedTokens) {
@@ -158,23 +152,17 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
       pair.tokenClassA === 'GALA|Unit|none|none' || pair.tokenClassB === 'GALA|Unit|none|none'
     );
     
-    console.log(`   Analyzing ${galaPairs.length} GALA pairs for cross-pair arbitrage`);
-    
     // Group pairs by tokens to find cross-pair opportunities
     const pairsByToken = this.groupPairsByToken(galaPairs);
     
     for (const [token, tokenPairs] of pairsByToken.entries()) {
       if (tokenPairs.length < 2) continue;
       
-      console.log(`   Checking ${token} pairs (${tokenPairs.length} pairs)`);
-      
       // Compare all pairs for this token
       for (let i = 0; i < tokenPairs.length; i++) {
         for (let j = i + 1; j < tokenPairs.length; j++) {
           const pairA = tokenPairs[i];
           const pairB = tokenPairs[j];
-          
-          console.log(`     Comparing ${pairA.tokenA.symbol}/${pairA.tokenB.symbol} vs ${pairB.tokenA.symbol}/${pairB.tokenB.symbol}`);
           
           const opportunity = await this.analyzePairArbitrage(pairA, pairB, api, quoteMap);
           if (opportunity) {
@@ -257,9 +245,6 @@ export class CrossPairArbitrageStrategy implements ArbitrageStrategy {
         token2ClassKey = tokenOutClassKey;
         token3ClassKey = relatedToken.tokenClass;
       }
-      
-      console.log(`     Checking triangular path: ${path1}, ${path2}, ${path3}`);
-      console.log(`     Debug: token1=${token1ClassKey}, token2=${token2ClassKey}, token3=${token3ClassKey}`);
       
       // Get quotes for the triangular path
       const testAmount = 1;
@@ -460,12 +445,9 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
     const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
     const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
     
-    console.log(`   Analyzing direct arbitrage for ${swapData.tokenIn.collection}/${swapData.tokenOut.collection}`);
-    
     // Only analyze if GALA is involved
     const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
     if (tokenInClassKey !== GALA_TOKEN_CLASS && tokenOutClassKey !== GALA_TOKEN_CLASS) {
-      console.log(`   Skipping direct arbitrage analysis - no GALA token involved`);
       return opportunities;
     }
     
@@ -494,11 +476,8 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       pair.tokenClassA === 'GALA|Unit|none|none' || pair.tokenClassB === 'GALA|Unit|none|none'
     );
     
-    console.log(`   Analyzing ${galaPairs.length} GALA pairs for direct arbitrage`);
-    
     for (const pair of galaPairs) {
       try {
-        console.log(`     Checking ${pair.tokenA.symbol}/${pair.tokenB.symbol} for direct arbitrage`);
         const opportunity = await this.analyzeDirectArbitrage(pair, api, quoteMap);
         if (opportunity) {
           opportunities.push(opportunity);
@@ -520,8 +499,6 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
       const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
       
-      console.log(`     Checking direct arbitrage for ${swapData.tokenIn.collection}/${swapData.tokenOut.collection}`);
-      
       const testAmount = 1;
       
       // Get quotes in both directions for the exact pair that was swapped
@@ -535,7 +512,6 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       
       // Check for invalid rates
       if (!isFinite(rateAB) || !isFinite(rateBA) || rateAB <= 0 || rateBA <= 0) {
-        console.log(`     Direct arbitrage analysis: Invalid rates (AB: ${rateAB}, BA: ${rateBA})`);
         return null;
       }
       
@@ -545,11 +521,8 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       
       // Check for invalid profit calculation
       if (!isFinite(profitPercentage) || !isFinite(spread)) {
-        console.log(`     Direct arbitrage analysis: Invalid profit calculation (spread: ${spread}, profit: ${profitPercentage})`);
         return null;
       }
-      
-      console.log(`     Direct arbitrage analysis: ${profitPercentage.toFixed(4)}% profit potential`);
       
       if (profitPercentage < config.minProfitThreshold) return null;
 
@@ -687,9 +660,7 @@ export class ArbitrageDetector {
 
     for (const strategy of strategies) {
       try {
-        console.log(`🔍 Running ${strategy.name}...`);
         const opportunities = await strategy.detectOpportunitiesForSwap(swapData, currentPrice, api);
-        console.log(`   Found ${opportunities.length} opportunities`);
         allOpportunities.push(...opportunities);
       } catch (error) {
         console.error(`Error in strategy ${strategy.name}:`, error);
