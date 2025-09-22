@@ -58,16 +58,91 @@ export class TradeExecutor {
   }
 
   private async runDirectArbitrage(execution: TradeExecution): Promise<void> {
-    const { opportunity } = execution;
+    const originalOpportunity = execution.opportunity;
+    const amountToTrade = originalOpportunity.maxTradeAmount;
+
+    if (!Number.isFinite(amountToTrade) || amountToTrade <= 0) {
+      throw new Error('Invalid trade amount for opportunity');
+    }
+
+    this.ensureNotCancelled(execution);
+    const refreshedBuyQuote = await this.api.getQuote(
+      originalOpportunity.tokenClassA,
+      originalOpportunity.tokenClassB,
+      amountToTrade
+    );
+
+    if (
+      !refreshedBuyQuote ||
+      !Number.isFinite(refreshedBuyQuote.outputAmount) ||
+      !Number.isFinite(refreshedBuyQuote.inputAmount) ||
+      refreshedBuyQuote.inputAmount <= 0 ||
+      refreshedBuyQuote.outputAmount <= 0
+    ) {
+      throw new Error('Unable to refresh buy quote for opportunity');
+    }
+
+    this.ensureNotCancelled(execution);
+    const refreshedSellQuote = await this.api.getQuote(
+      originalOpportunity.tokenClassB,
+      originalOpportunity.tokenClassA,
+      refreshedBuyQuote.outputAmount
+    );
+
+    if (
+      !refreshedSellQuote ||
+      !Number.isFinite(refreshedSellQuote.outputAmount) ||
+      !Number.isFinite(refreshedSellQuote.inputAmount) ||
+      refreshedSellQuote.inputAmount <= 0 ||
+      refreshedSellQuote.outputAmount <= 0
+    ) {
+      throw new Error('Unable to refresh sell quote for opportunity');
+    }
+
+    const sellRate = refreshedBuyQuote.outputAmount / refreshedBuyQuote.inputAmount;
+    const buyRate = refreshedSellQuote.outputAmount / refreshedSellQuote.inputAmount;
+
+    if (!Number.isFinite(sellRate) || !Number.isFinite(buyRate) || sellRate <= 0 || buyRate <= 0) {
+      throw new Error('Invalid refreshed quote rates');
+    }
+
+    const buyPrice = 1 / buyRate;
+    const sellPrice = sellRate;
+    const spread = sellPrice - buyPrice;
+    const profitPercentage = (spread / buyPrice) * 100;
+    const estimatedProfit = spread * amountToTrade;
+
+    const refreshedOpportunity: ArbitrageOpportunity = {
+      ...originalOpportunity,
+      buyPrice,
+      sellPrice,
+      profitPercentage,
+      estimatedProfit,
+      quoteAToB: refreshedBuyQuote,
+      quoteBToA: refreshedSellQuote,
+      maxTradeAmount: amountToTrade,
+    };
+
+    execution.opportunity = refreshedOpportunity;
+
+    if (
+      !Number.isFinite(profitPercentage) ||
+      !Number.isFinite(estimatedProfit) ||
+      profitPercentage < config.minProfitThreshold ||
+      estimatedProfit <= 0
+    ) {
+      this.cancelExecution(execution, 'Opportunity no longer profitable after re-quoting');
+      return;
+    }
 
     this.ensureNotCancelled(execution);
     execution.status = 'buying';
     const buySwap = await this.executeSwap(
       execution,
-      opportunity.tokenClassA,
-      opportunity.tokenClassB,
-      opportunity.maxTradeAmount,
-      opportunity.quoteAToB
+      refreshedOpportunity.tokenClassA,
+      refreshedOpportunity.tokenClassB,
+      amountToTrade,
+      refreshedOpportunity.quoteAToB
     );
     execution.buySwap = buySwap;
 
@@ -75,16 +150,14 @@ export class TradeExecutor {
     execution.status = 'selling';
     const sellSwap = await this.executeSwap(
       execution,
-      opportunity.tokenClassB,
-      opportunity.tokenClassA,
+      refreshedOpportunity.tokenClassB,
+      refreshedOpportunity.tokenClassA,
       buySwap.outputAmount,
-      opportunity.quoteBToA
+      refreshedOpportunity.quoteBToA
     );
     execution.sellSwap = sellSwap;
 
     execution.actualProfit = sellSwap.outputAmount - buySwap.inputAmount;
-
-
   }
 
   private async executeSwap(
@@ -122,6 +195,12 @@ export class TradeExecutor {
     if (execution.status === 'cancelled') {
       throw new Error('Trade cancelled');
     }
+  }
+
+  private cancelExecution(execution: TradeExecution, reason: string): void {
+    execution.status = 'cancelled';
+    execution.error = reason;
+    execution.endTime = Date.now();
   }
 
   getActiveTrades(): TradeExecution[] {
