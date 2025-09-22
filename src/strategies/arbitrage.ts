@@ -533,9 +533,21 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       const rateAB = quoteAB.outputAmount / quoteAB.inputAmount;
       const rateBA = quoteBA.outputAmount / quoteBA.inputAmount;
       
+      // Check for invalid rates
+      if (!isFinite(rateAB) || !isFinite(rateBA) || rateAB <= 0 || rateBA <= 0) {
+        console.log(`     Direct arbitrage analysis: Invalid rates (AB: ${rateAB}, BA: ${rateBA})`);
+        return null;
+      }
+      
       // Check if there's a profitable spread
       const spread = rateAB - (1 / rateBA);
       const profitPercentage = (spread / (1 / rateBA)) * 100;
+      
+      // Check for invalid profit calculation
+      if (!isFinite(profitPercentage) || !isFinite(spread)) {
+        console.log(`     Direct arbitrage analysis: Invalid profit calculation (spread: ${spread}, profit: ${profitPercentage})`);
+        return null;
+      }
       
       console.log(`     Direct arbitrage analysis: ${profitPercentage.toFixed(4)}% profit potential`);
       
@@ -552,16 +564,27 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
       // Check if we have sufficient funds for trading
       const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenInClassKey, this.balanceSnapshot);
 
+      const buyPrice = 1 / rateBA;
+      const sellPrice = rateAB;
+      const estimatedProfit = spread * maxTradeAmount;
+      const priceDiscrepancy = Math.abs(currentPrice - rateAB) / currentPrice * 100;
+
+      // Final validation before creating opportunity
+      if (!isFinite(buyPrice) || !isFinite(sellPrice) || !isFinite(estimatedProfit) || !isFinite(priceDiscrepancy)) {
+        console.log(`     Direct arbitrage analysis: Invalid final values (buyPrice: ${buyPrice}, sellPrice: ${sellPrice}, estimatedProfit: ${estimatedProfit}, priceDiscrepancy: ${priceDiscrepancy})`);
+        return null;
+      }
+
       return {
         id: `direct-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         tokenA: swapData.tokenIn.collection,
         tokenB: swapData.tokenOut.collection,
         tokenClassA: tokenInClassKey,
         tokenClassB: tokenOutClassKey,
-        buyPrice: 1 / rateBA,
-        sellPrice: rateAB,
+        buyPrice,
+        sellPrice,
         profitPercentage,
-        estimatedProfit: spread * maxTradeAmount,
+        estimatedProfit,
         maxTradeAmount,
         buyQuote: quoteBA,
         sellQuote: quoteAB,
@@ -570,7 +593,7 @@ export class DirectArbitrageStrategy implements ArbitrageStrategy {
         shortfall: fundsCheck.shortfall,
         timestamp: Date.now(),
         currentMarketPrice: currentPrice,
-        priceDiscrepancy: Math.abs(currentPrice - rateAB) / currentPrice * 100,
+        priceDiscrepancy,
         confidence: profitPercentage
       };
     } catch (error) {

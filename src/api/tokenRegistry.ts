@@ -36,23 +36,25 @@ export class TokenRegistry {
       return;
     }
 
-    try {
-      console.log('🔄 Loading available tokens from GalaSwap API...');
-      const data = await this.fetchTokenList();
+    // try {
+    //   console.log('🔄 Loading available tokens from GalaSwap API...');
+    //   const data = await this.fetchTokenList();
 
-      if (data.status === 200 && data.data?.token) {
-        this.availableTokens = data.data.token.map(this.transformToken);
-        console.log(`✅ Loaded ${this.availableTokens.length} available tokens from GalaSwap`);
-      } else {
-        throw new Error('Failed to load tokens from GalaSwap API');
-      }
-    } catch (error) {
-      console.error('❌ Failed to load available tokens:', error);
-      this.availableTokens = [...FALLBACK_TOKENS];
-      console.log('⚠️  Using fallback token list');
-    } finally {
-      this.tokensLoaded = true;
-    }
+    //   if (data.status === 200 && data.data?.token) {
+    //     this.availableTokens = data.data.token.map(this.transformToken);
+    //     console.log(`✅ Loaded ${this.availableTokens.length} available tokens from GalaSwap`);
+    //   } else {
+    //     throw new Error('Failed to load tokens from GalaSwap API');
+    //   }
+    // } catch (error) {
+    //   console.error('❌ Failed to load available tokens:', error);
+    //   this.availableTokens = [...FALLBACK_TOKENS];
+    //   console.log('⚠️  Using fallback token list');
+    // } finally {
+    //   this.tokensLoaded = true;
+    // }
+    this.availableTokens = [...FALLBACK_TOKENS];
+    this.tokensLoaded = true;
   }
 
   async getAvailableTokens(): Promise<TokenInfo[]> {
@@ -104,7 +106,7 @@ export class TokenRegistry {
   }
 
   private async fetchTokenList(): Promise<GalaSwapTokenListResponse> {
-    const response = await this.fetchFn(`${this.options.galaSwapApiUrl}/user/token-list?search=&page=1&limit=100`);
+    const response = await this.fetchFn(`${this.options.galaSwapApiUrl}/user/token-list?search=&page=1&limit=20`);
     return await response.json() as GalaSwapTokenListResponse;
   }
 

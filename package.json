@@ -22,6 +22,7 @@
     "@gala-chain/gswap-sdk": "file:stubs/gswap-sdk",
     "@kafkajs/confluent-schema-registry": "file:stubs/confluent-schema-registry",
     "@types/node": "^24.5.2",
+    "avsc": "^5.7.9",
     "axios": "^1.12.2",
     "dotenv": "^17.2.2",
     "kafkajs": "^2.2.4",

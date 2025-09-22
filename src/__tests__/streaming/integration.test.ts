@@ -1,12 +1,28 @@
 import { KafkaBlockConsumer } from '../../streaming/kafkaConsumer';
 import { RealTimeEventProcessor } from '../../streaming/eventProcessor';
 import { GSwapAPI } from '../../api/gswap';
-import { createMockKafkaMessage, MockSchemaRegistry } from './testUtils';
+import { createMockKafkaMessage } from './testUtils';
 import { KafkaConfig } from '../../streaming/types';
 
-// Mock the schema registry
-jest.mock('@kafkajs/confluent-schema-registry', () => ({
-  SchemaRegistry: jest.fn().mockImplementation(() => new MockSchemaRegistry()),
+// Mock the avsc library
+jest.mock('avsc', () => ({
+  Type: {
+    forSchema: jest.fn().mockReturnValue({
+      fromBuffer: jest.fn().mockReturnValue({
+        blockNumber: '506599',
+        channelName: 'asset-channel',
+        createdAt: '2025-09-19T15:55:27.056Z',
+        isConfigurationBlock: false,
+        header: {
+          number: '506599',
+          previous_hash: '',
+          data_hash: ''
+        },
+        transactions: [],
+        configtxs: []
+      })
+    })
+  }
 }));
 
 // Mock the GSwapAPI
@@ -122,9 +138,6 @@ describe('Kafka Consumer Integration Tests', () => {
       apiUrl: 'https://test-kafka.example.com:9092',
       apiKey: 'test-api-key',
       apiSecret: 'test-api-secret',
-      schemaHost: 'https://test-schema.example.com:8081',
-      schemaUsername: 'test-schema-user',
-      schemaPassword: 'test-schema-pass',
       topic: 'test-topic',
       clientId: 'test-client',
       groupId: 'test-group'
@@ -136,89 +149,89 @@ describe('Kafka Consumer Integration Tests', () => {
 
   describe('End-to-End Message Processing', () => {
     it('should process a complete Kafka message and detect arbitrage opportunities', async () => {
-      // Create a mock message with GALA swap data
-      const mockSchemaRegistry = new MockSchemaRegistry({
-        blockNumber: '506599',
-        channelName: 'asset-channel',
-        createdAt: '2025-09-19T15:55:27.056Z',
-        isConfigurationBlock: false,
-        header: {
-          number: '506599',
-          previous_hash: '',
-          data_hash: ''
-        },
-        transactions: [
-          {
-            id: 'test-tx-integration',
-            creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
-            type: 'ENDORSER_TRANSACTION',
-            validationCode: {
-              transactionId: 'test-tx-integration',
-              validationCode: 0,
-              validationEnum: 'VALID'
-            },
-            actions: [
-              {
-                chaincodeResponse: {
-                  status: 200,
-                  message: '',
-                  payload: '{"Data":"GALA|Unit|none|none","Status":1}'
-                },
-                reads: [],
-                writes: [],
-                endorserMsps: ['CuratorOrg'],
-                args: [
-                  'DexV3Contract:BatchSubmit',
-                  JSON.stringify({
-                    operations: [
-                      {
-                        method: 'Swap',
-                        dto: {
-                          zeroForOne: false,
-                          token0: {
-                            collection: 'GALA',
-                            category: 'Unit',
-                            type: 'none',
-                            additionalKey: 'none'
+      // Mock avsc to return data with transactions
+      const avsc = require('avsc');
+      avsc.Type.forSchema.mockReturnValue({
+        fromBuffer: jest.fn().mockReturnValue({
+          blockNumber: '506599',
+          channelName: 'asset-channel',
+          createdAt: '2025-09-19T15:55:27.056Z',
+          isConfigurationBlock: false,
+          header: {
+            number: '506599',
+            previous_hash: '',
+            data_hash: ''
+          },
+          transactions: [
+            {
+              id: 'test-tx-integration',
+              creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
+              type: 'ENDORSER_TRANSACTION',
+              validationCode: {
+                transactionId: 'test-tx-integration',
+                validationCode: 0,
+                validationEnum: 'VALID'
+              },
+              actions: [
+                {
+                  chaincodeResponse: {
+                    status: 200,
+                    message: '',
+                    payload: '{"Data":"GALA|Unit|none|none","Status":1}'
+                  },
+                  reads: [],
+                  writes: [],
+                  endorserMsps: ['CuratorOrg'],
+                  args: [
+                    'DexV3Contract:BatchSubmit',
+                    JSON.stringify({
+                      operations: [
+                        {
+                          method: 'Swap',
+                          dto: {
+                            zeroForOne: false,
+                            token0: {
+                              collection: 'GALA',
+                              category: 'Unit',
+                              type: 'none',
+                              additionalKey: 'none'
+                            },
+                            token1: {
+                              collection: 'GUSDC',
+                              category: 'Unit',
+                              type: 'none',
+                              additionalKey: 'none'
+                            },
+                            amount: '1000000000000000000',
+                            amountInMaximum: '2500000000',
+                            fee: 3000,
+                            sqrtPriceLimit: '79228162514264337593543950336',
+                            recipient: '0x1234567890123456789012345678901234567890',
+                            signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+                            uniqueKey: 'test-unique-key-integration'
                           },
-                          token1: {
-                            collection: 'GUSDC',
-                            category: 'Unit',
-                            type: 'none',
-                            additionalKey: 'none'
-                          },
-                          amount: '1000000000000000000',
-                          amountInMaximum: '2500000000',
-                          fee: 3000,
-                          sqrtPriceLimit: '79228162514264337593543950336',
-                          recipient: '0x1234567890123456789012345678901234567890',
-                          signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-                          uniqueKey: 'test-unique-key-integration'
-                        },
-                        uniqueId: 'test-unique-id-integration'
+                          uniqueId: 'test-unique-id-integration'
+                        }
+                      ],
+                      uniqueKey: 'batch-unique-key-integration',
+                      signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                      trace: {
+                        traceId: 'test-trace-id-integration',
+                        spanId: 'test-span-id-integration'
                       }
-                    ],
-                    uniqueKey: 'batch-unique-key-integration',
-                    signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-                    trace: {
-                      traceId: 'test-trace-id-integration',
-                      spanId: 'test-span-id-integration'
-                    }
-                  })
-                ],
-                chaincode: {
-                  name: 'basic-asset',
-                  version: '50527314'
+                    })
+                  ],
+                  chaincode: {
+                    name: 'basic-asset',
+                    version: '50527314'
+                  }
                 }
-              }
-            ]
-          }
-        ],
-        configtxs: []
+              ]
+            }
+          ],
+          configtxs: []
+        })
       });
-
-      // Replace the schema registry with our mock
-      (consumer as any).schemaRegistry = mockSchemaRegistry;
 
       const mockMessage = createMockKafkaMessage();
       const processMessage = (consumer as any).processMessage.bind(consumer);
@@ -234,98 +247,100 @@ describe('Kafka Consumer Integration Tests', () => {
     });
 
     it('should handle multiple transactions in a single block', async () => {
-      const mockSchemaRegistry = new MockSchemaRegistry({
-        blockNumber: '506600',
-        channelName: 'asset-channel',
-        createdAt: '2025-09-19T15:55:28.000Z',
-        isConfigurationBlock: false,
-        header: {
-          number: '506600',
-          previous_hash: '',
-          data_hash: ''
-        },
-        transactions: [
-          {
-            id: 'test-tx-1',
-            creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
-            type: 'ENDORSER_TRANSACTION',
-            validationCode: {
-              transactionId: 'test-tx-1',
-              validationCode: 0,
-              validationEnum: 'VALID'
-            },
-            actions: [
-              {
-                chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GALA|Unit|none|none","Status":1}' },
-                reads: [], writes: [], endorserMsps: ['CuratorOrg'],
-                args: ['DexV3Contract:BatchSubmit', JSON.stringify({
-                  operations: [{
-                    method: 'Swap',
-                    dto: {
-                      zeroForOne: false,
-                      token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
-                      token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
-                      amount: '1000000000000000000',
-                      amountInMaximum: '2500000000',
-                      fee: 3000,
-                      sqrtPriceLimit: '79228162514264337593543950336',
-                      recipient: '0x1234567890123456789012345678901234567890',
-                      signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-                      uniqueKey: 'test-unique-key-1'
-                    },
-                    uniqueId: 'test-unique-id-1'
-                  }],
-                  uniqueKey: 'batch-unique-key-1',
-                  signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-                  trace: { traceId: 'test-trace-id-1', spanId: 'test-span-id-1' }
-                })],
-                chaincode: { name: 'basic-asset', version: '50527314' }
-              }
-            ]
+      // Mock avsc to return data with multiple transactions
+      const avsc = require('avsc');
+      avsc.Type.forSchema.mockReturnValue({
+        fromBuffer: jest.fn().mockReturnValue({
+          blockNumber: '506600',
+          channelName: 'asset-channel',
+          createdAt: '2025-09-19T15:55:28.000Z',
+          isConfigurationBlock: false,
+          header: {
+            number: '506600',
+            previous_hash: '',
+            data_hash: ''
           },
-          {
-            id: 'test-tx-2',
-            creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
-            type: 'ENDORSER_TRANSACTION',
-            validationCode: {
-              transactionId: 'test-tx-2',
-              validationCode: 0,
-              validationEnum: 'VALID'
+          transactions: [
+            {
+              id: 'test-tx-1',
+              creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
+              type: 'ENDORSER_TRANSACTION',
+              validationCode: {
+                transactionId: 'test-tx-1',
+                validationCode: 0,
+                validationEnum: 'VALID'
+              },
+              actions: [
+                {
+                  chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GALA|Unit|none|none","Status":1}' },
+                  reads: [], writes: [], endorserMsps: ['CuratorOrg'],
+                  args: ['DexV3Contract:BatchSubmit', JSON.stringify({
+                    operations: [{
+                      method: 'Swap',
+                      dto: {
+                        zeroForOne: false,
+                        token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
+                        token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
+                        amount: '1000000000000000000',
+                        amountInMaximum: '2500000000',
+                        fee: 3000,
+                        sqrtPriceLimit: '79228162514264337593543950336',
+                        recipient: '0x1234567890123456789012345678901234567890',
+                        signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+                        uniqueKey: 'test-unique-key-1'
+                      },
+                      uniqueId: 'test-unique-id-1'
+                    }],
+                    uniqueKey: 'batch-unique-key-1',
+                    signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                    trace: { traceId: 'test-trace-id-1', spanId: 'test-span-id-1' }
+                  })],
+                  chaincode: { name: 'basic-asset', version: '50527314' }
+                }
+              ]
             },
-            actions: [
-              {
-                chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GUSDC|Unit|none|none","Status":1}' },
-                reads: [], writes: [], endorserMsps: ['CuratorOrg'],
-                args: ['DexV3Contract:BatchSubmit', JSON.stringify({
-                  operations: [{
-                    method: 'Swap',
-                    dto: {
-                      zeroForOne: true,
-                      token0: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
-                      token1: { collection: 'GUSDT', category: 'Unit', type: 'none', additionalKey: 'none' },
-                      amount: '1000000',
-                      amountInMaximum: '1000000',
-                      fee: 3000,
-                      sqrtPriceLimit: '79228162514264337593543950336',
-                      recipient: '0x1234567890123456789012345678901234567890',
-                      signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-                      uniqueKey: 'test-unique-key-2'
-                    },
-                    uniqueId: 'test-unique-id-2'
-                  }],
-                  uniqueKey: 'batch-unique-key-2',
-                  signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-                  trace: { traceId: 'test-trace-id-2', spanId: 'test-span-id-2' }
-                })],
-                chaincode: { name: 'basic-asset', version: '50527314' }
-              }
-            ]
-          }
-        ],
-        configtxs: []
+            {
+              id: 'test-tx-2',
+              creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
+              type: 'ENDORSER_TRANSACTION',
+              validationCode: {
+                transactionId: 'test-tx-2',
+                validationCode: 0,
+                validationEnum: 'VALID'
+              },
+              actions: [
+                {
+                  chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GUSDC|Unit|none|none","Status":1}' },
+                  reads: [], writes: [], endorserMsps: ['CuratorOrg'],
+                  args: ['DexV3Contract:BatchSubmit', JSON.stringify({
+                    operations: [{
+                      method: 'Swap',
+                      dto: {
+                        zeroForOne: true,
+                        token0: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
+                        token1: { collection: 'GUSDT', category: 'Unit', type: 'none', additionalKey: 'none' },
+                        amount: '1000000',
+                        amountInMaximum: '1000000',
+                        fee: 3000,
+                        sqrtPriceLimit: '79228162514264337593543950336',
+                        recipient: '0x1234567890123456789012345678901234567890',
+                        signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+                        uniqueKey: 'test-unique-key-2'
+                      },
+                      uniqueId: 'test-unique-id-2'
+                    }],
+                    uniqueKey: 'batch-unique-key-2',
+                    signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                    trace: { traceId: 'test-trace-id-2', spanId: 'test-span-id-2' }
+                  })],
+                  chaincode: { name: 'basic-asset', version: '50527314' }
+                }
+              ]
+            }
+          ],
+          configtxs: []
+        })
       });
-
-      (consumer as any).schemaRegistry = mockSchemaRegistry;
 
       const mockMessage = createMockKafkaMessage();
       const processMessage = (consumer as any).processMessage.bind(consumer);
@@ -364,62 +379,62 @@ describe('Kafka Consumer Integration Tests', () => {
     });
 
     it('should maintain deduplication under load', async () => {
-      // Create a mock schema registry with transaction data
-      const mockSchemaRegistry = new MockSchemaRegistry({
-        blockNumber: '506601',
-        channelName: 'asset-channel',
-        createdAt: '2025-09-19T15:55:29.000Z',
-        isConfigurationBlock: false,
-        header: {
-          number: '506601',
-          previous_hash: '',
-          data_hash: ''
-        },
-        transactions: [
-          {
-            id: 'test-tx-dedup',
-            creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
-            type: 'ENDORSER_TRANSACTION',
-            validationCode: {
-              transactionId: 'test-tx-dedup',
-              validationCode: 0,
-              validationEnum: 'VALID'
-            },
-            actions: [
-              {
-                chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GALA|Unit|none|none","Status":1}' },
-                reads: [], writes: [], endorserMsps: ['CuratorOrg'],
-                args: ['DexV3Contract:BatchSubmit', JSON.stringify({
-                  operations: [{
-                    method: 'Swap',
-                    dto: {
-                      zeroForOne: false,
-                      token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
-                      token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
-                      amount: '1000000000000000000',
-                      amountInMaximum: '2500000000',
-                      fee: 3000,
-                      sqrtPriceLimit: '79228162514264337593543950336',
-                      recipient: '0x1234567890123456789012345678901234567890',
-                      signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-                      uniqueKey: 'test-unique-key-dedup'
-                    },
-                    uniqueId: 'test-unique-id-dedup'
-                  }],
-                  uniqueKey: 'batch-unique-key-dedup',
-                  signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-                  trace: { traceId: 'test-trace-id-dedup', spanId: 'test-span-id-dedup' }
-                })],
-                chaincode: { name: 'basic-asset', version: '50527314' }
-              }
-            ]
-          }
-        ],
-        configtxs: []
+      // Mock avsc to return data with transaction
+      const avsc = require('avsc');
+      avsc.Type.forSchema.mockReturnValue({
+        fromBuffer: jest.fn().mockReturnValue({
+          blockNumber: '506601',
+          channelName: 'asset-channel',
+          createdAt: '2025-09-19T15:55:29.000Z',
+          isConfigurationBlock: false,
+          header: {
+            number: '506601',
+            previous_hash: '',
+            data_hash: ''
+          },
+          transactions: [
+            {
+              id: 'test-tx-dedup',
+              creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
+              type: 'ENDORSER_TRANSACTION',
+              validationCode: {
+                transactionId: 'test-tx-dedup',
+                validationCode: 0,
+                validationEnum: 'VALID'
+              },
+              actions: [
+                {
+                  chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GALA|Unit|none|none","Status":1}' },
+                  reads: [], writes: [], endorserMsps: ['CuratorOrg'],
+                  args: ['DexV3Contract:BatchSubmit', JSON.stringify({
+                    operations: [{
+                      method: 'Swap',
+                      dto: {
+                        zeroForOne: false,
+                        token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
+                        token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
+                        amount: '1000000000000000000',
+                        amountInMaximum: '2500000000',
+                        fee: 3000,
+                        sqrtPriceLimit: '79228162514264337593543950336',
+                        recipient: '0x1234567890123456789012345678901234567890',
+                        signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+                        uniqueKey: 'test-unique-key-dedup'
+                      },
+                      uniqueId: 'test-unique-id-dedup'
+                    }],
+                    uniqueKey: 'batch-unique-key-dedup',
+                    signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                    trace: { traceId: 'test-trace-id-dedup', spanId: 'test-span-id-dedup' }
+                  })],
+                  chaincode: { name: 'basic-asset', version: '50527314' }
+                }
+              ]
+            }
+          ],
+          configtxs: []
+        })
       });
-
-      // Replace the schema registry with our mock
-      (consumer as any).schemaRegistry = mockSchemaRegistry;
 
       const mockMessage = createMockKafkaMessage();
       const processMessage = (consumer as any).processMessage.bind(consumer);

@@ -109,9 +109,6 @@ export interface KafkaConfig {
   apiUrl: string;
   apiKey: string;
   apiSecret: string;
-  schemaHost: string;
-  schemaUsername: string;
-  schemaPassword: string;
   topic: string;
   // Additional Kafka configuration
   clientId?: string;

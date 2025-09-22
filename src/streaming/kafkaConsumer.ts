@@ -1,12 +1,12 @@
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
-import { SchemaRegistry } from '@kafkajs/confluent-schema-registry';
 import { BlockData, KafkaConfig, EventProcessor } from './types';
+import avro from 'avsc';
+import { parsedBlockSchema } from './parsed-block.schema';
 
 export class KafkaBlockConsumer {
   private kafka: Kafka;
   private consumer: Consumer;
   private eventProcessor: EventProcessor;
-  private schemaRegistry: SchemaRegistry;
   private isRunning: boolean = false;
   private topic: string;
 
@@ -28,15 +28,6 @@ export class KafkaBlockConsumer {
         initialRetryTime: 100,
         retries: 8
       }
-    });
-
-    // Initialize schema registry
-    this.schemaRegistry = new SchemaRegistry({
-      host: config.schemaHost,
-      auth: {
-        username: config.schemaUsername,
-        password: config.schemaPassword,
-      },
     });
 
     this.consumer = this.kafka.consumer({ 
@@ -106,10 +97,20 @@ export class KafkaBlockConsumer {
    */
   private async deserializeMessageValue(buffer: Buffer): Promise<any> {
     try {
-      // Try to decode using Avro schema registry first
-      const decoded = await this.schemaRegistry.decode(buffer);
-      return decoded;
+      // Check if this is a Confluent Avro message (with magic byte and schema ID)
+      if (buffer.length >= 5 && buffer[0] === 0x00) {
+        const dataBuffer = buffer.subarray(5);
+        const type = avro.Type.forSchema(parsedBlockSchema as any);
+        return type.fromBuffer(dataBuffer);
+      } else {
+        // Try direct Avro decoding
+        console.log('📄 Direct Avro message detected');
+        const type = avro.Type.forSchema(parsedBlockSchema as any);
+        return type.fromBuffer(buffer);
+      }
     } catch (e) {
+      console.log('⚠️  Avro decoding failed:', e instanceof Error ? e.message : String(e));
+      
       // Fallback to JSON parsing if Avro decoding fails
       try {
         const jsonString = buffer.toString('utf8');
