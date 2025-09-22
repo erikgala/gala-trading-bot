@@ -1,6 +1,7 @@
 import { ArbitrageDetector } from '../../strategies/arbitrage';
 import { GSwapAPI, TradingPair, SwapQuote } from '../../api/gswap';
 import type { BalanceSnapshot } from '../../api/gswap';
+import type { DexV3Operation } from '../../streaming/types';
 
 const { BalanceSnapshot: RealBalanceSnapshot } = jest.requireActual<
   typeof import('../../api/gswap')
@@ -54,6 +55,7 @@ describe('ArbitrageDetector', () => {
     mockApi.createTokenClassKey.mockImplementation(({ collection, category, type, additionalKey }) => (
       `${collection}|${category}|${type}|${additionalKey}`
     ));
+    mockApi.isTokenAvailableByClassKey.mockReturnValue(true);
 
     detector = new ArbitrageDetector();
   });
@@ -91,6 +93,38 @@ describe('ArbitrageDetector', () => {
     const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
 
     expect(opportunities).toHaveLength(0);
+  });
+
+  it('evaluates opportunities directly from swap operations', async () => {
+    const operation: DexV3Operation = {
+      method: 'Swap',
+      uniqueId: 'operation-1',
+      dto: {
+        zeroForOne: true,
+        token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
+        token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
+        amount: '1000',
+        amountInMaximum: '1025',
+        fee: 3000,
+        sqrtPriceLimit: '0',
+        recipient: '0xrecipient',
+        signature: '0xsignature',
+        uniqueKey: 'swap-key-1',
+      },
+    };
+
+    const quoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 27);
+    const quoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 27, 1.1);
+
+    mockApi.getQuote
+      .mockResolvedValueOnce(quoteAB)
+      .mockResolvedValueOnce(quoteBA);
+
+    const opportunity = await detector.evaluateSwapOperation(operation, mockApi);
+
+    expect(opportunity).not.toBeNull();
+    expect(opportunity?.tokenA).toBe('GALA');
+    expect(opportunity?.tokenB).toBe('GUSDC');
   });
 
   it('detects direct opportunities across trading pairs', async () => {

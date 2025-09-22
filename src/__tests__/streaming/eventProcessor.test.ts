@@ -2,21 +2,23 @@ import { RealTimeEventProcessor } from '../../streaming/eventProcessor';
 import { GSwapAPI } from '../../api/gswap';
 import { BlockData, TransactionData, ActionData } from '../../streaming/types';
 import { createMockKafkaMessage } from './testUtils';
+import { createMockArbitrageOpportunity } from '../testUtils';
 
 // Mock the GSwapAPI
 jest.mock('../../api/gswap');
 const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 
-// Mock the arbitrage detector
-jest.mock('../../strategies/arbitrage', () => ({
-  ArbitrageDetector: jest.fn().mockImplementation(() => ({
-    detectOpportunitiesForSwap: jest.fn().mockResolvedValue([])
-  }))
-}));
-
 describe('RealTimeEventProcessor', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let eventProcessor: RealTimeEventProcessor;
+  let evaluateSwapOperation: jest.Mock;
+  let mockDetector: { evaluateSwapOperation: jest.Mock };
+  let mockTradeExecutor: { executeArbitrage: jest.Mock };
+  let mockMockTradeExecutor: {
+    executeArbitrageTrade: jest.Mock;
+    getStats: jest.Mock;
+    generateFinalReport: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -51,7 +53,23 @@ describe('RealTimeEventProcessor', () => {
       shortfall: 0
     });
 
-    eventProcessor = new RealTimeEventProcessor(mockApi);
+    evaluateSwapOperation = jest.fn().mockResolvedValue(null);
+    mockDetector = { evaluateSwapOperation };
+    mockTradeExecutor = {
+      executeArbitrage: jest.fn().mockResolvedValue({ status: 'completed' })
+    };
+    mockMockTradeExecutor = {
+      executeArbitrageTrade: jest.fn().mockResolvedValue(true),
+      getStats: jest.fn().mockReturnValue({}),
+      generateFinalReport: jest.fn(),
+    };
+
+    eventProcessor = new RealTimeEventProcessor(
+      mockApi,
+      mockDetector as unknown as any,
+      mockTradeExecutor as unknown as any,
+      mockMockTradeExecutor as unknown as any
+    );
   });
 
   describe('Block Processing', () => {
@@ -138,9 +156,7 @@ describe('RealTimeEventProcessor', () => {
 
       await eventProcessor.processBlock(blockData);
 
-      // Verify that transactions were processed
-      expect(mockApi.createTokenClassKey).toHaveBeenCalled();
-      expect(mockApi.isTokenAvailableByClassKey).toHaveBeenCalled();
+      expect(evaluateSwapOperation).toHaveBeenCalledTimes(1);
     });
 
     it('should skip non-asset-channel blocks', async () => {
@@ -160,8 +176,7 @@ describe('RealTimeEventProcessor', () => {
 
       await eventProcessor.processBlock(blockData);
 
-      // Should not process any transactions
-      expect(mockApi.createTokenClassKey).not.toHaveBeenCalled();
+      expect(evaluateSwapOperation).not.toHaveBeenCalled();
     });
 
     it('should avoid processing the same block twice', async () => {
@@ -175,16 +190,66 @@ describe('RealTimeEventProcessor', () => {
           previous_hash: '0xdef',
           data_hash: '0x123'
         },
-        transactions: [],
+        transactions: [
+          {
+            id: 'test-tx-dedup',
+            creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
+            type: 'ENDORSER_TRANSACTION',
+            validationCode: {
+              transactionId: 'test-tx-dedup',
+              validationCode: 0,
+              validationEnum: 'VALID'
+            },
+            actions: [
+              {
+                chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GALA|Unit|none|none","Status":1}' },
+                reads: [],
+                writes: [],
+                endorserMsps: ['CuratorOrg'],
+                args: [
+                  'DexV3Contract:BatchSubmit',
+                  JSON.stringify({
+                    operations: [
+                      {
+                        method: 'Swap',
+                        dto: {
+                          zeroForOne: false,
+                          token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
+                          token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
+                          amount: '1000000000000000000',
+                          amountInMaximum: '2500000000',
+                          fee: 3000,
+                          sqrtPriceLimit: '79228162514264337593543950336',
+                          recipient: '0x1234567890123456789012345678901234567890',
+                          signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+                          uniqueKey: 'test-unique-key-456'
+                        },
+                        uniqueId: 'test-unique-id-789'
+                      }
+                    ],
+                    uniqueKey: 'batch-unique-key-123',
+                    signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                    trace: {
+                      traceId: 'test-trace-id-2',
+                      spanId: 'test-span-id-2'
+                    }
+                  })
+                ],
+                chaincode: {
+                  name: 'basic-asset',
+                  version: '50527314'
+                }
+              }
+            ]
+          }
+        ],
         configtxs: []
       };
 
-      // Process the same block twice
       await eventProcessor.processBlock(blockData);
       await eventProcessor.processBlock(blockData);
 
-      // Should only process once
-      expect(mockApi.createTokenClassKey).not.toHaveBeenCalled();
+      expect(evaluateSwapOperation).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -258,8 +323,7 @@ describe('RealTimeEventProcessor', () => {
 
       await eventProcessor.processTransaction(transactionData);
 
-      // Verify that the action was processed
-      expect(mockApi.createTokenClassKey).toHaveBeenCalled();
+      expect(evaluateSwapOperation).toHaveBeenCalledTimes(1);
     });
 
     it('should skip transactions without DexV3Contract:BatchSubmit actions', async () => {
@@ -296,8 +360,7 @@ describe('RealTimeEventProcessor', () => {
 
       await eventProcessor.processTransaction(transactionData);
 
-      // Should not process non-swap actions
-      expect(mockApi.createTokenClassKey).not.toHaveBeenCalled();
+      expect(evaluateSwapOperation).not.toHaveBeenCalled();
     });
 
     it('should avoid processing the same transaction twice', async () => {
@@ -310,15 +373,47 @@ describe('RealTimeEventProcessor', () => {
           validationCode: 0,
           validationEnum: 'VALID'
         },
-        actions: []
+        actions: [
+          {
+            chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GALA|Unit|none|none","Status":1}' },
+            reads: [],
+            writes: [],
+            endorserMsps: ['CuratorOrg'],
+            args: [
+              'DexV3Contract:BatchSubmit',
+              JSON.stringify({
+                operations: [
+                  {
+                    method: 'Swap',
+                    dto: {
+                      zeroForOne: false,
+                      token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
+                      token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
+                      amount: '1000000000000000000',
+                      amountInMaximum: '2500000000',
+                      fee: 3000,
+                      sqrtPriceLimit: '79228162514264337593543950336',
+                      recipient: '0x1234567890123456789012345678901234567890',
+                      signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+                      uniqueKey: 'test-unique-key-dedup'
+                    },
+                    uniqueId: 'test-unique-id-dedup'
+                  }
+                ],
+                uniqueKey: 'batch-unique-key-dedup',
+                signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                trace: { traceId: 'test-trace-id-dedup', spanId: 'test-span-id-dedup' }
+              })
+            ],
+            chaincode: { name: 'basic-asset', version: '50527314' }
+          }
+        ]
       };
 
-      // Process the same transaction twice
       await eventProcessor.processTransaction(transactionData);
       await eventProcessor.processTransaction(transactionData);
 
-      // Should only process once
-      expect(mockApi.createTokenClassKey).not.toHaveBeenCalled();
+      expect(evaluateSwapOperation).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -340,14 +435,85 @@ describe('RealTimeEventProcessor', () => {
 
       await eventProcessor.processBlock(blockData);
 
+    const stats = eventProcessor.getStats();
+    expect(stats.blocksProcessed).toBe(1);
+    expect(stats.blocksFiltered).toBe(0);
+    expect(stats.opportunitiesFound).toBe(0);
+    expect(stats.tradesExecuted).toBe(0);
+  });
+
+    it('increments statistics when an opportunity is executed', async () => {
+      evaluateSwapOperation.mockResolvedValue(createMockArbitrageOpportunity());
+
+      const blockData: BlockData = {
+        blockNumber: '506604',
+        channelName: 'asset-channel',
+        createdAt: '2025-09-19T15:55:32.000Z',
+        isConfigurationBlock: false,
+        header: {
+          number: '506604',
+          previous_hash: '0x123',
+          data_hash: '0x456'
+        },
+        transactions: [
+          {
+            id: 'test-tx-6',
+            creator: { mspId: 'CuratorOrg', name: 'Client|ops' },
+            type: 'ENDORSER_TRANSACTION',
+            validationCode: {
+              transactionId: 'test-tx-6',
+              validationCode: 0,
+              validationEnum: 'VALID'
+            },
+            actions: [
+              {
+                chaincodeResponse: { status: 200, message: '', payload: '{"Data":"GALA|Unit|none|none","Status":1}' },
+                reads: [],
+                writes: [],
+                endorserMsps: ['CuratorOrg'],
+                args: [
+                  'DexV3Contract:BatchSubmit',
+                  JSON.stringify({
+                    operations: [
+                      {
+                        method: 'Swap',
+                        dto: {
+                          zeroForOne: false,
+                          token0: { collection: 'GALA', category: 'Unit', type: 'none', additionalKey: 'none' },
+                          token1: { collection: 'GUSDC', category: 'Unit', type: 'none', additionalKey: 'none' },
+                          amount: '1000000000000000000',
+                          amountInMaximum: '2500000000',
+                          fee: 3000,
+                          sqrtPriceLimit: '79228162514264337593543950336',
+                          recipient: '0x1234567890123456789012345678901234567890',
+                          signature: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+                          uniqueKey: 'test-unique-key-stats'
+                        },
+                        uniqueId: 'test-unique-id-stats'
+                      }
+                    ],
+                    uniqueKey: 'batch-unique-key-stats',
+                    signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                    trace: { traceId: 'test-trace-id-stats', spanId: 'test-span-id-stats' }
+                  })
+                ],
+                chaincode: { name: 'basic-asset', version: '50527314' }
+              }
+            ]
+          }
+        ],
+        configtxs: []
+      };
+
+      await eventProcessor.processBlock(blockData);
+
       const stats = eventProcessor.getStats();
       expect(stats.blocksProcessed).toBe(1);
-      expect(stats.blocksFiltered).toBe(0);
-      expect(stats.opportunitiesFound).toBe(0);
-      expect(stats.tradesExecuted).toBe(0);
+      expect(stats.opportunitiesFound).toBe(1);
+      expect(stats.tradesExecuted).toBe(1);
     });
 
-    it('should track filtered blocks', async () => {
+  it('should track filtered blocks', async () => {
       const blockData: BlockData = {
         blockNumber: '506603',
         channelName: 'non-asset-channel',
@@ -372,10 +538,7 @@ describe('RealTimeEventProcessor', () => {
 
   describe('Error Handling', () => {
     it('should handle processing errors gracefully', async () => {
-      // Mock API to throw an error
-      mockApi.createTokenClassKey.mockImplementation(() => {
-        throw new Error('API Error');
-      });
+      evaluateSwapOperation.mockRejectedValue(new Error('Detector failure'));
 
       const blockData: BlockData = {
         blockNumber: '506604',

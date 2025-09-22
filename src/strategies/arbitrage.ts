@@ -7,10 +7,60 @@ import {
   buildQuoteCacheKey,
 } from '../api/gswap';
 import { config } from '../config';
+import type { DexV3Operation } from '../streaming/types';
 
 const QUOTE_CACHE_TTL_MS = 30_000;
 const TEST_TRADE_AMOUNT = 1;
 const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
+
+interface SwapExtraction {
+  swapData: SwapData;
+  currentPrice: number;
+}
+
+function extractSwapTokens(operation: DexV3Operation) {
+  const { dto } = operation;
+
+  if (dto.zeroForOne) {
+    return { tokenIn: dto.token0, tokenOut: dto.token1 };
+  }
+
+  return { tokenIn: dto.token1, tokenOut: dto.token0 };
+}
+
+function estimatePriceFromOperation(operation: DexV3Operation): number {
+  const amountIn = parseFloat(operation.dto.amount);
+  const amountOut = parseFloat(operation.dto.amountInMaximum);
+
+  if (Number.isFinite(amountIn) && Number.isFinite(amountOut) && amountIn > 0 && amountOut > 0) {
+    return amountOut / amountIn;
+  }
+
+  return 0;
+}
+
+function buildSwapExtraction(operation: DexV3Operation): SwapExtraction {
+  const { tokenIn, tokenOut } = extractSwapTokens(operation);
+
+  const swapData: SwapData = {
+    tokenIn,
+    tokenOut,
+    amountIn: operation.dto.amount,
+    amountInMaximum: operation.dto.amountInMaximum,
+    fee: operation.dto.fee,
+    sqrtPriceLimit: operation.dto.sqrtPriceLimit,
+    recipient: operation.dto.recipient,
+    signature: operation.dto.signature,
+    uniqueKey: operation.dto.uniqueKey,
+    method: operation.method,
+    uniqueId: operation.uniqueId,
+  };
+
+  return {
+    swapData,
+    currentPrice: estimatePriceFromOperation(operation),
+  };
+}
 
 async function getQuoteFromCacheOrApi(
   quoteMap: QuoteMap | undefined,
@@ -95,6 +145,12 @@ interface DirectArbitrageParams {
 }
 
 export class ArbitrageDetector {
+  async evaluateSwapOperation(operation: DexV3Operation, api: GSwapAPI): Promise<ArbitrageOpportunity | null> {
+    const { swapData, currentPrice } = buildSwapExtraction(operation);
+    const opportunities = await this.detectOpportunitiesForSwap(swapData, currentPrice, api);
+    return opportunities[0] ?? null;
+  }
+
   async detectOpportunitiesForSwap(
     swapData: SwapData,
     currentPrice: number,
@@ -104,6 +160,13 @@ export class ArbitrageDetector {
     const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
 
     if (!this.involvesGala(tokenInClassKey, tokenOutClassKey)) {
+      return [];
+    }
+
+    if (
+      !api.isTokenAvailableByClassKey(tokenInClassKey) ||
+      !api.isTokenAvailableByClassKey(tokenOutClassKey)
+    ) {
       return [];
     }
 
