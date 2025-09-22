@@ -236,7 +236,7 @@ export class GSwapAPI {
         amountOutMinimum: minOutputAmount,
       };
 
-      await this.gSwap.swaps.swap(
+      const result = await this.gSwap.swaps.swap(
         inputTokenClass,
         outputTokenClass,
         feeTier,
@@ -247,11 +247,11 @@ export class GSwapAPI {
       await this.refreshBalanceSnapshot();
 
       return {
-        transactionHash: 'unknown',
+        transactionHash: result.transactionId,
         inputAmount,
         outputAmount: quote.outputAmount,
         actualPrice: quote.outputAmount / inputAmount,
-        gasUsed: 0,
+        gasUsed: 1,
         timestamp: Date.now(),
       };
     } catch (error) {

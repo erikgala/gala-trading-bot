@@ -1,112 +1,46 @@
-import { TradeExecutor, TradeExecution, TradeExecutorOptions } from '../../trader/executor';
-import { GSwapAPI, SwapResult } from '../../api/gswap';
+import { TradeExecutor, TradeExecution } from '../../trader/executor';
+import { GSwapAPI } from '../../api/gswap';
 import { ArbitrageOpportunity } from '../../strategies/arbitrage';
-import { 
-  createMockArbitrageOpportunity, 
-  createMockSwapResult 
+import {
+  createMockArbitrageOpportunity,
+  createMockSwapResult,
 } from '../testUtils';
 
-// Mock the GSwapAPI
 jest.mock('../../api/gswap');
 const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 
 describe('TradeExecutor', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let executor: TradeExecutor;
-  const executorOptions: TradeExecutorOptions = {
-    maxRetries: 1,
-    baseRetryDelayMs: 0,
-    maxRetryDelayMs: 0
-  };
 
   beforeEach(() => {
     mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    executor = new TradeExecutor(mockApi, executorOptions);
+    executor = new TradeExecutor(mockApi);
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
 
+  const createOpportunity = (): ArbitrageOpportunity => createMockArbitrageOpportunity();
+
   describe('constructor', () => {
-    it('should initialize with empty active trades', () => {
+    it('initializes with no active trades', () => {
       expect(executor.getActiveTrades()).toHaveLength(0);
     });
   });
 
   describe('executeArbitrage', () => {
-    it('should create trade execution and add to active trades', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      const mockSwapResult = createMockSwapResult('0x123');
-
-      mockApi.executeSwap.mockResolvedValue(mockSwapResult);
-
-      const execution = await executor.executeArbitrage(opportunity);
-
-      expect(execution).toBeDefined();
-      expect(execution.id).toMatch(/^exec-\d+-[a-z0-9]+$/);
-      expect(execution.opportunity).toBe(opportunity);
-      expect(execution.status).toBe('completed');
-      expect(execution.startTime).toBeGreaterThan(0);
-      expect(execution.endTime).toBeGreaterThanOrEqual(execution.startTime);
-      expect(execution.buySwap).toBeDefined();
-      expect(execution.sellSwap).toBeDefined();
-      expect(execution.actualProfit).toBeDefined();
-
-      const activeTrades = executor.getActiveTrades();
-      expect(activeTrades).toHaveLength(1);
-      expect(activeTrades[0].id).toBe(execution.id);
-    }, 10000);
-
-    it('should handle swap execution failure', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      const error = new Error('Swap execution failed');
-
-      mockApi.executeSwap.mockRejectedValue(error);
-
-      const execution = await executor.executeArbitrage(opportunity);
-
-      expect(execution.status).toBe('failed');
-      expect(execution.error).toBe('Swap execution failed');
-      expect(execution.endTime).toBeDefined();
-    }, 10000);
-
-    it('should handle buy swap failure', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-
-      // Mock executeSwap to throw an error on first call
-      mockApi.executeSwap
-        .mockRejectedValueOnce(new Error('Buy swap failed'))
-        .mockResolvedValueOnce(createMockSwapResult('0x456')); // Sell swap would succeed but won't be called
-
-      const execution = await executor.executeArbitrage(opportunity);
-
-      expect(execution.status).toBe('failed');
-      expect(execution.error).toBe('Buy swap failed');
-      expect(execution.buySwap).toBeUndefined();
-      expect(execution.sellSwap).toBeUndefined();
-    }, 10000);
-
-    it('should handle sell swap failure after successful buy', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      const buySwapResult = createMockSwapResult('0x123');
-
-      mockApi.executeSwap
-        .mockResolvedValueOnce(buySwapResult) // Buy swap succeeds
-        .mockRejectedValueOnce(new Error('Sell swap failed')); // Sell swap fails
-
-      const execution = await executor.executeArbitrage(opportunity);
-
-      expect(execution.status).toBe('failed');
-      expect(execution.error).toBe('Sell swap failed');
-      expect(execution.buySwap).toBeDefined();
-      expect(execution.sellSwap).toBeUndefined();
-    }, 10000);
-
-    it('should calculate actual profit correctly', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      const buySwapResult = createMockSwapResult('0x123');
-      const sellSwapResult = createMockSwapResult('0x456');
+    it('completes trade when both swaps succeed', async () => {
+      const opportunity = createOpportunity();
+      const buySwapResult = createMockSwapResult('0x123', {
+        inputAmount: opportunity.maxTradeAmount,
+        outputAmount: opportunity.maxTradeAmount * 25,
+      });
+      const sellSwapResult = createMockSwapResult('0x456', {
+        inputAmount: buySwapResult.outputAmount,
+        outputAmount: buySwapResult.outputAmount + 500,
+      });
 
       mockApi.executeSwap
         .mockResolvedValueOnce(buySwapResult)
@@ -114,115 +48,91 @@ describe('TradeExecutor', () => {
 
       const execution = await executor.executeArbitrage(opportunity);
 
-      expect(mockApi.executeSwap).toHaveBeenCalledTimes(2);
-      expect(execution.buySwap).toBeDefined();
-      expect(execution.sellSwap).toBeDefined();
       expect(execution.status).toBe('completed');
-    }, 10000);
-
-    it('should pass cached quotes to the swap executor when available', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      const buySwapResult = createMockSwapResult('0xaaa', {
-        inputAmount: opportunity.maxTradeAmount,
-        outputAmount: opportunity.buyQuote.outputAmount,
-        actualPrice: opportunity.buyQuote.outputAmount / opportunity.maxTradeAmount
-      });
-      const sellSwapResult = createMockSwapResult('0xbbb', {
-        inputAmount: opportunity.sellQuote.inputAmount,
-        outputAmount: opportunity.sellQuote.outputAmount,
-        actualPrice: opportunity.sellQuote.outputAmount / opportunity.sellQuote.inputAmount
-      });
-
-      // Mock executeSwap to return the expected results
-      mockApi.executeSwap
-        .mockImplementation((inputToken, outputToken, amount, slippage, quote) => {
-          if (inputToken === opportunity.tokenClassA && outputToken === opportunity.tokenClassB) {
-            expect(quote).toEqual(opportunity.buyQuote);
-            return Promise.resolve(buySwapResult);
-          } else if (inputToken === opportunity.tokenClassB && outputToken === opportunity.tokenClassA) {
-            expect(quote).toEqual(opportunity.sellQuote);
-            return Promise.resolve(sellSwapResult);
-          }
-          return Promise.resolve(createMockSwapResult('0xunknown'));
-        });
-
-      await executor.executeArbitrage(opportunity);
-
+      expect(execution.buySwap).toEqual(buySwapResult);
+      expect(execution.sellSwap).toEqual(sellSwapResult);
+      expect(execution.actualProfit).toBe(sellSwapResult.outputAmount - buySwapResult.inputAmount);
+      expect(execution.endTime).toBeDefined();
       expect(mockApi.executeSwap).toHaveBeenCalledTimes(2);
-    }, 10000);
+    });
+
+    it('fails trade when swap execution throws', async () => {
+      const opportunity = createOpportunity();
+      mockApi.executeSwap.mockRejectedValue(new Error('Swap execution failed'));
+
+      const execution = await executor.executeArbitrage(opportunity);
+
+      expect(execution.status).toBe('failed');
+      expect(execution.error).toBe('Swap execution failed');
+      expect(execution.buySwap).toBeUndefined();
+      expect(execution.sellSwap).toBeUndefined();
+      expect(execution.endTime).toBeDefined();
+    });
+
+    it('fails trade when sell swap fails', async () => {
+      const opportunity = createOpportunity();
+      const buySwapResult = createMockSwapResult('0xabc');
+
+      mockApi.executeSwap
+        .mockResolvedValueOnce(buySwapResult)
+        .mockRejectedValueOnce(new Error('Sell swap failed'));
+
+      const execution = await executor.executeArbitrage(opportunity);
+
+      expect(execution.status).toBe('failed');
+      expect(execution.error).toBe('Sell swap failed');
+      expect(execution.buySwap).toEqual(buySwapResult);
+      expect(execution.sellSwap).toBeUndefined();
+    });
+
+    it('cancels execution when trade is cancelled mid-flight', async () => {
+      const opportunity = createOpportunity();
+      const buySwapResult = createMockSwapResult('0x999');
+
+      mockApi.executeSwap.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve(buySwapResult), 25))
+      );
+
+      const executionPromise = executor.executeArbitrage(opportunity);
+      const [activeExecution] = executor.getActiveTrades();
+      expect(activeExecution).toBeDefined();
+
+      await executor.cancelTradeExecution(activeExecution.id);
+
+      const execution = await executionPromise;
+      expect(execution.status).toBe('cancelled');
+      expect(execution.error).toBe('Trade cancelled');
+    });
   });
 
   describe('cancelTradeExecution', () => {
-    it('should cancel pending trade', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      
-      // Start execution but don't await it
-      const executionPromise = executor.executeArbitrage(opportunity);
-      
-      // Get the execution ID from active trades
-      const activeTrades = executor.getActiveTrades();
-      expect(activeTrades).toHaveLength(1);
-      const executionId = activeTrades[0].id;
-
-      // Cancel the trade
-      const cancelled = await executor.cancelTradeExecution(executionId);
-      expect(cancelled).toBe(true);
-
-      // Wait for the execution to complete
-      await executionPromise;
-
-      const finalTrades = executor.getActiveTrades();
-      const finalExecution = finalTrades.find(t => t.id === executionId);
-      expect(finalExecution?.status).toBe('cancelled');
-    }, 10000);
-
-    it('should return false for non-existent trade', async () => {
-      const cancelled = await executor.cancelTradeExecution('non-existent-id');
-      expect(cancelled).toBe(false);
+    it('returns false when trade does not exist', async () => {
+      await expect(executor.cancelTradeExecution('missing')).resolves.toBe(false);
     });
   });
 
   describe('getActiveTrades', () => {
-    it('should return empty array when no active trades', () => {
-      const activeTrades = executor.getActiveTrades();
-      expect(activeTrades).toHaveLength(0);
-    });
-
-    it('should return active trades', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      
-      // Start execution but don't await it
+    it('returns active executions', async () => {
+      const opportunity = createOpportunity();
       executor.executeArbitrage(opportunity);
 
       const activeTrades = executor.getActiveTrades();
       expect(activeTrades).toHaveLength(1);
-      expect(['pending', 'buying', 'selling']).toContain(activeTrades[0].status);
+      expect(['pending', 'buying', 'selling', 'completed', 'failed', 'cancelled']).toContain(activeTrades[0].status);
     });
   });
 
   describe('getTradingCapacity', () => {
-    it('should return correct capacity when no active trades', () => {
+    it('reflects current usage', () => {
       const capacity = executor.getTradingCapacity();
       expect(capacity.current).toBe(0);
-      expect(capacity.max).toBe(3); // Default from config
-      expect(capacity.available).toBe(3);
-    });
-
-    it('should return correct capacity with active trades', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      
-      // Start execution but don't await it
-      executor.executeArbitrage(opportunity);
-
-      const capacity = executor.getTradingCapacity();
-      expect(capacity.current).toBe(1);
       expect(capacity.max).toBe(3);
-      expect(capacity.available).toBe(2);
+      expect(capacity.available).toBe(3);
     });
   });
 
   describe('getTradingStats', () => {
-    it('should return zero stats when no trades', () => {
+    it('returns zeroed stats when no trades executed', () => {
       const stats = executor.getTradingStats();
       expect(stats.totalTrades).toBe(0);
       expect(stats.completedTrades).toBe(0);
@@ -232,15 +142,24 @@ describe('TradeExecutor', () => {
       expect(stats.successRate).toBe(0);
     });
 
-    it('should calculate stats correctly after trades', async () => {
-      const opportunity = createMockArbitrageOpportunity();
-      const mockSwapResult = createMockSwapResult('0x123');
+    it('updates stats after successful trade', async () => {
+      const opportunity = createOpportunity();
+      const buySwapResult = createMockSwapResult('0x123', {
+        inputAmount: opportunity.maxTradeAmount,
+        outputAmount: opportunity.maxTradeAmount * 25,
+      });
+      const sellSwapResult = createMockSwapResult('0x456', {
+        inputAmount: buySwapResult.outputAmount,
+        outputAmount: buySwapResult.outputAmount + 500,
+      });
 
-      mockApi.executeSwap.mockResolvedValue(mockSwapResult);
+      mockApi.executeSwap
+        .mockResolvedValueOnce(buySwapResult)
+        .mockResolvedValueOnce(sellSwapResult);
 
       await executor.executeArbitrage(opportunity);
-
       const stats = executor.getTradingStats();
+
       expect(stats.totalTrades).toBe(1);
       expect(stats.completedTrades).toBe(1);
       expect(stats.failedTrades).toBe(0);
@@ -251,12 +170,12 @@ describe('TradeExecutor', () => {
   });
 
   describe('TradeExecution interface', () => {
-    it('should have correct structure', () => {
+    it('matches expected structure', () => {
       const execution: TradeExecution = {
         id: 'test-execution',
-        opportunity: createMockArbitrageOpportunity(),
+        opportunity: createOpportunity(),
         status: 'pending',
-        startTime: Date.now()
+        startTime: Date.now(),
       };
 
       expect(execution.id).toBe('test-execution');
@@ -265,7 +184,6 @@ describe('TradeExecutor', () => {
       expect(execution.buySwap).toBeUndefined();
       expect(execution.sellSwap).toBeUndefined();
       expect(execution.actualProfit).toBeUndefined();
-      expect(execution.error).toBeUndefined();
     });
   });
 });

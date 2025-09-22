@@ -2,6 +2,7 @@ import { KafkaBlockConsumer } from '../../streaming/kafkaConsumer';
 import { RealTimeEventProcessor } from '../../streaming/eventProcessor';
 import { GSwapAPI } from '../../api/gswap';
 import { createMockKafkaMessage } from './testUtils';
+import { createMockArbitrageOpportunity } from '../testUtils';
 import { KafkaConfig } from '../../streaming/types';
 
 // Mock the avsc library
@@ -29,56 +30,19 @@ jest.mock('avsc', () => ({
 jest.mock('../../api/gswap');
 const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 
-// Mock the arbitrage detector
-jest.mock('../../strategies/arbitrage', () => ({
-  ArbitrageDetector: jest.fn().mockImplementation(() => ({
-    detectOpportunitiesForSwap: jest.fn().mockResolvedValue([
-      {
-        id: 'test-opportunity-1',
-        tokenA: 'GALA',
-        tokenB: 'GUSDC',
-        tokenClassA: 'GALA|Unit|none|none',
-        tokenClassB: 'GUSDC|Unit|none|none',
-        buyPrice: 0.04,
-        sellPrice: 0.041,
-        profitPercentage: 2.5,
-        estimatedProfit: 25,
-        maxTradeAmount: 1000,
-        buyQuote: {
-          inputToken: 'GALA|Unit|none|none',
-          outputToken: 'GUSDC|Unit|none|none',
-          inputAmount: 1000,
-          outputAmount: 25000,
-          priceImpact: 0.01,
-          feeTier: 3000,
-          route: []
-        },
-        sellQuote: {
-          inputToken: 'GUSDC|Unit|none|none',
-          outputToken: 'GALA|Unit|none|none',
-          inputAmount: 25000,
-          outputAmount: 1025,
-          priceImpact: 0.01,
-          feeTier: 3000,
-          route: []
-        },
-        hasFunds: true,
-        currentBalance: 10000,
-        shortfall: 0,
-        timestamp: Date.now(),
-        currentMarketPrice: 0.04,
-        priceDiscrepancy: 2.5,
-        confidence: 85
-      }
-    ])
-  }))
-}));
-
 describe('Kafka Consumer Integration Tests', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
   let eventProcessor: RealTimeEventProcessor;
   let consumer: KafkaBlockConsumer;
   let kafkaConfig: KafkaConfig;
+  let evaluateSwapOperation: jest.Mock;
+  let mockDetector: { evaluateSwapOperation: jest.Mock };
+  let mockTradeExecutor: { executeArbitrage: jest.Mock };
+  let mockMockTradeExecutor: {
+    executeArbitrageTrade: jest.Mock;
+    getStats: jest.Mock;
+    generateFinalReport: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -130,8 +94,24 @@ describe('Kafka Consumer Integration Tests', () => {
       route: []
     });
 
+    evaluateSwapOperation = jest.fn().mockResolvedValue(createMockArbitrageOpportunity());
+    mockDetector = { evaluateSwapOperation };
+    mockTradeExecutor = {
+      executeArbitrage: jest.fn().mockResolvedValue({ status: 'completed' })
+    };
+    mockMockTradeExecutor = {
+      executeArbitrageTrade: jest.fn().mockResolvedValue(true),
+      getStats: jest.fn().mockReturnValue({}),
+      generateFinalReport: jest.fn(),
+    };
+
     // Create event processor
-    eventProcessor = new RealTimeEventProcessor(mockApi);
+    eventProcessor = new RealTimeEventProcessor(
+      mockApi,
+      mockDetector as unknown as any,
+      mockTradeExecutor as unknown as any,
+      mockMockTradeExecutor as unknown as any
+    );
 
     // Create Kafka config
     kafkaConfig = {
@@ -347,19 +327,15 @@ describe('Kafka Consumer Integration Tests', () => {
       
       await processMessage(mockMessage);
 
-      // Should process both transactions (each has 2 tokens: token0 and token1)
-      expect(mockApi.createTokenClassKey).toHaveBeenCalledTimes(4);
+      expect(evaluateSwapOperation).toHaveBeenCalledTimes(2);
     });
 
     it('should handle errors gracefully during processing', async () => {
-      // Mock API to throw an error
-      mockApi.createTokenClassKey.mockImplementation(() => {
-        throw new Error('API Error');
-      });
+      evaluateSwapOperation.mockRejectedValue(new Error('Detector failure'));
 
       const mockMessage = createMockKafkaMessage();
       const processMessage = (consumer as any).processMessage.bind(consumer);
-      
+
       // Should not throw an error
       await expect(processMessage(mockMessage)).resolves.not.toThrow();
     });
@@ -444,8 +420,7 @@ describe('Kafka Consumer Integration Tests', () => {
       await processMessage(mockMessage);
       await processMessage(mockMessage);
 
-      // Should only process once due to deduplication (2 tokens: token0 and token1)
-      expect(mockApi.createTokenClassKey).toHaveBeenCalledTimes(2);
+      expect(evaluateSwapOperation).toHaveBeenCalledTimes(1);
     });
   });
 });
