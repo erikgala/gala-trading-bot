@@ -17,14 +17,19 @@ export const createMockTradingPair = (tokenA: string, tokenB: string): TradingPa
   tokenClassB: `${tokenB}|Unit|none|none`
 });
 
-export const createMockSwapQuote = (inputAmount: number, outputAmount: number): SwapQuote => ({
-  inputToken: 'GALA|Unit|none|none',
-  outputToken: 'GUSDC|Unit|none|none',
+export const createMockSwapQuote = (
+  inputAmount: number,
+  outputAmount: number,
+  inputToken = 'GALA|Unit|none|none',
+  outputToken = 'GUSDC|Unit|none|none'
+): SwapQuote => ({
+  inputToken,
+  outputToken,
   inputAmount,
   outputAmount,
   priceImpact: 0.1,
   feeTier: 3000,
-  route: ['GALA|Unit|none|none', 'GUSDC|Unit|none|none']
+  route: [inputToken, outputToken]
 });
 
 export const createMockSwapResult = (
@@ -51,8 +56,8 @@ export const createMockArbitrageOpportunity = (): ArbitrageOpportunity => ({
   profitPercentage: 5.13,
   estimatedProfit: 51.3,
   maxTradeAmount: 1000,
-  buyQuote: createMockSwapQuote(1000, 25641),
-  sellQuote: createMockSwapQuote(25641, 1051.3),
+  quoteAToB: createMockSwapQuote(1000, 25641, 'GALA|Unit|none|none', 'GUSDC|Unit|none|none'),
+  quoteBToA: createMockSwapQuote(25641, 1051.3, 'GUSDC|Unit|none|none', 'GALA|Unit|none|none'),
   hasFunds: true,
   currentBalance: 10000,
   shortfall: 0,

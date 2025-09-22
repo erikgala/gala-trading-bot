@@ -80,6 +80,48 @@ describe('Basic Functionality Tests', () => {
       const cancelled = await executor.cancelTradeExecution('non-existent-id');
       expect(cancelled).toBe(false);
     });
+
+    it('should pass directionally correct quotes to executeSwap', async () => {
+      const opportunity = createMockArbitrageOpportunity();
+
+      mockApi.executeSwap.mockResolvedValueOnce(
+        createMockSwapResult('0xbuy', {
+          inputAmount: opportunity.maxTradeAmount,
+          outputAmount: opportunity.quoteAToB.outputAmount,
+        })
+      );
+
+      mockApi.executeSwap.mockResolvedValueOnce(
+        createMockSwapResult('0xsell', {
+          inputAmount: opportunity.quoteAToB.outputAmount,
+          outputAmount: opportunity.quoteBToA.outputAmount,
+        })
+      );
+
+      const execution = await executor.executeArbitrage(opportunity);
+
+      expect(execution.status).toBe('completed');
+      expect(mockApi.executeSwap).toHaveBeenCalledTimes(2);
+
+      const [buyInputToken, buyOutputToken, buyInputAmount, , buyQuote] =
+        mockApi.executeSwap.mock.calls[0];
+      const [sellInputToken, sellOutputToken, sellInputAmount, , sellQuote] =
+        mockApi.executeSwap.mock.calls[1];
+
+      expect(buyInputToken).toBe(opportunity.tokenClassA);
+      expect(buyOutputToken).toBe(opportunity.tokenClassB);
+      expect(buyInputAmount).toBe(opportunity.maxTradeAmount);
+      expect(buyQuote).toBe(opportunity.quoteAToB);
+      expect(buyQuote?.inputToken).toBe(opportunity.tokenClassA);
+      expect(buyQuote?.outputToken).toBe(opportunity.tokenClassB);
+
+      expect(sellInputToken).toBe(opportunity.tokenClassB);
+      expect(sellOutputToken).toBe(opportunity.tokenClassA);
+      expect(sellInputAmount).toBe(opportunity.quoteAToB.outputAmount);
+      expect(sellQuote).toBe(opportunity.quoteBToA);
+      expect(sellQuote?.inputToken).toBe(opportunity.tokenClassB);
+      expect(sellQuote?.outputToken).toBe(opportunity.tokenClassA);
+    });
   });
 
   describe('Test Utilities', () => {
@@ -92,8 +134,8 @@ describe('Basic Functionality Tests', () => {
       expect(opportunity.tokenB).toBe('GUSDC');
       expect(opportunity.profitPercentage).toBe(5.13);
       expect(opportunity.hasFunds).toBe(true);
-      expect(opportunity.buyQuote).toBeDefined();
-      expect(opportunity.sellQuote).toBeDefined();
+      expect(opportunity.quoteAToB).toBeDefined();
+      expect(opportunity.quoteBToA).toBeDefined();
     });
 
     it('should create mock swap result', () => {

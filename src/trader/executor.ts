@@ -67,7 +67,7 @@ export class TradeExecutor {
       opportunity.tokenClassA,
       opportunity.tokenClassB,
       opportunity.maxTradeAmount,
-      opportunity.buyQuote
+      opportunity.quoteAToB
     );
     execution.buySwap = buySwap;
 
@@ -78,7 +78,7 @@ export class TradeExecutor {
       opportunity.tokenClassB,
       opportunity.tokenClassA,
       buySwap.outputAmount,
-      opportunity.sellQuote
+      opportunity.quoteBToA
     );
     execution.sellSwap = sellSwap;
 
