@@ -196,26 +196,6 @@ export class RealTimeEventProcessor implements EventProcessor {
     }
   }
 
-
-  /**
-   * Calculate price from sqrtPriceLimit (Uniswap V3 style) - DEPRECATED
-   * sqrtPriceLimit is a price limit, not the current market price
-   */
-  private calculatePriceFromSqrtPriceLimit(sqrtPriceLimit: string): number {
-    try {
-      const sqrtPrice = parseFloat(sqrtPriceLimit);
-      // Price = (sqrtPrice / 2^96)^2
-      // For Uniswap V3, sqrtPrice is stored as Q64.96 fixed point
-      const Q64_96 = Math.pow(2, 96);
-      const price = Math.pow(sqrtPrice / Q64_96, 2);
-  
-      return price;
-    } catch (error) {
-      console.warn('⚠️  Error calculating price from sqrtPriceLimit:', error);
-      return 0;
-    }
-  }
-
   /**
    * Detect arbitrage opportunities using the sophisticated strategies focused on the specific swap
    */
