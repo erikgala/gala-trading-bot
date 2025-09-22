@@ -1,31 +1,40 @@
-import {
-  ArbitrageDetector,
-  CrossPairArbitrageStrategy,
-  DirectArbitrageStrategy,
-  ArbitrageOpportunity
-} from '../../strategies/arbitrage';
-import { GSwapAPI, TradingPair, TokenInfo, SwapQuote } from '../../api/gswap';
+import { ArbitrageDetector } from '../../strategies/arbitrage';
+import { GSwapAPI, TradingPair, SwapQuote } from '../../api/gswap';
 import type { BalanceSnapshot } from '../../api/gswap';
 
 const { BalanceSnapshot: RealBalanceSnapshot } = jest.requireActual<
   typeof import('../../api/gswap')
 >('../../api/gswap');
-import { 
-  createMockTokenInfo, 
-  createMockTradingPair, 
-  createMockSwapQuote, 
+import {
   createMockArbitrageOpportunity,
-  createMockSwapData
+  createMockTradingPair,
+  createMockSwapData,
 } from '../testUtils';
 
-// Mock the GSwapAPI
 jest.mock('../../api/gswap');
 const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 
-const createMockBalanceSnapshot = (balance = 10000): BalanceSnapshot => {
+const createMockBalanceSnapshot = (balance = 10_000): BalanceSnapshot => {
   const balances = new Map<string, number>([['GALA|Unit|none|none', balance]]);
   return new RealBalanceSnapshot(balances, Date.now());
 };
+
+const createQuote = (
+  inputToken: string,
+  outputToken: string,
+  inputAmount: number,
+  outputAmount: number
+): SwapQuote => ({
+  inputToken,
+  outputToken,
+  inputAmount,
+  outputAmount,
+  priceImpact: 0.1,
+  feeTier: 3000,
+  route: [inputToken, outputToken],
+});
+
+const DIRECT_PAIR: TradingPair = createMockTradingPair('GALA', 'GUSDC');
 
 describe('ArbitrageDetector', () => {
   let mockApi: jest.Mocked<GSwapAPI>;
@@ -35,12 +44,17 @@ describe('ArbitrageDetector', () => {
   beforeEach(() => {
     mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
     balanceSnapshot = createMockBalanceSnapshot();
+
     mockApi.getBalanceSnapshot.mockResolvedValue(balanceSnapshot);
     mockApi.checkTradingFunds.mockResolvedValue({
       hasFunds: true,
       currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
       shortfall: 0,
     });
+    mockApi.createTokenClassKey.mockImplementation(({ collection, category, type, additionalKey }) => (
+      `${collection}|${category}|${type}|${additionalKey}`
+    ));
+
     detector = new ArbitrageDetector();
   });
 
@@ -48,153 +62,67 @@ describe('ArbitrageDetector', () => {
     jest.clearAllMocks();
   });
 
-  describe('detectAllOpportunities', () => {
-    it('should detect opportunities using all strategies', async () => {
-      const mockPairs: TradingPair[] = [
-        createMockTradingPair('GALA', 'GUSDC')
-      ];
+  it('detects direct opportunities for swap data', async () => {
+    const swapData = createMockSwapData();
+    const quoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 27);
+    const quoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 27, 1.1);
 
-      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi, new Map());
+    mockApi.getQuote
+      .mockResolvedValueOnce(quoteAB)
+      .mockResolvedValueOnce(quoteBA);
 
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
+    const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
 
-    it('should return empty array when no strategies find opportunities', async () => {
-      const mockPairs: TradingPair[] = [];
-      
-      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi, new Map());
-
-      expect(opportunities).toHaveLength(0);
-    });
+    expect(opportunities).toHaveLength(1);
+    expect(opportunities[0].tokenA).toBe('GALA');
+    expect(opportunities[0].tokenB).toBe('GUSDC');
+    expect(opportunities[0].profitPercentage).toBeGreaterThan(0);
   });
 
-  describe('detectOpportunitiesForSwap', () => {
-    it('should detect opportunities for specific swap data', async () => {
-      const swapData = createMockSwapData();
-      const currentPrice = 0.04;
+  it('returns empty array when no profitable spread exists', async () => {
+    const swapData = createMockSwapData();
+    const neutralQuoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 25);
+    const neutralQuoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 25, 1);
 
-      const opportunities = await detector.detectOpportunitiesForSwap(swapData, currentPrice, mockApi);
+    mockApi.getQuote
+      .mockResolvedValueOnce(neutralQuoteAB)
+      .mockResolvedValueOnce(neutralQuoteBA);
 
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-});
+    const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
 
-describe('CrossPairArbitrageStrategy', () => {
-  let mockApi: jest.Mocked<GSwapAPI>;
-  let strategy: CrossPairArbitrageStrategy;
-  let balanceSnapshot: BalanceSnapshot;
-
-  beforeEach(() => {
-    mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    balanceSnapshot = createMockBalanceSnapshot();
-    strategy = new CrossPairArbitrageStrategy(balanceSnapshot);
-    mockApi.checkTradingFunds.mockResolvedValue({
-      hasFunds: true,
-      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
-      shortfall: 0,
-    });
+    expect(opportunities).toHaveLength(0);
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
+  it('detects direct opportunities across trading pairs', async () => {
+    const quoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 27);
+    const quoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 27, 1.1);
+
+    mockApi.getQuote
+      .mockResolvedValueOnce(quoteAB)
+      .mockResolvedValueOnce(quoteBA);
+
+    const opportunities = await detector.detectAllOpportunities([DIRECT_PAIR], mockApi, new Map());
+
+    expect(opportunities).toHaveLength(1);
+    expect(opportunities[0].tokenClassA).toBe('GALA|Unit|none|none');
+    expect(opportunities[0].tokenClassB).toBe('GUSDC|Unit|none|none');
   });
 
-  describe('detectOpportunities', () => {
-    it('should filter pairs to only include GALA pairs', async () => {
-      const mockPairs: TradingPair[] = [
-        createMockTradingPair('GALA', 'GUSDC'),
-        createMockTradingPair('GUSDC', 'GUSDT') // This should be ignored
-      ];
-
-      const mockTokens: TokenInfo[] = [
-        createMockTokenInfo('GALA', 'GALA|Unit|none|none'),
-        createMockTokenInfo('GUSDC', 'GUSDC|Unit|none|none'),
-        createMockTokenInfo('GUSDT', 'GUSDT|Unit|none|none')
-      ];
-
-      mockApi.getAvailableTokens.mockResolvedValue(mockTokens);
-      mockApi.getQuote.mockResolvedValue(createMockSwapQuote(1000, 25000));
-
-      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi, new Map());
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-
-  describe('detectOpportunitiesForSwap', () => {
-    it('should analyze opportunities for specific swap data', async () => {
-      const swapData = createMockSwapData();
-      const currentPrice = 0.04;
-      const mockTokens: TokenInfo[] = [
-        createMockTokenInfo('GALA', 'GALA|Unit|none|none'),
-        createMockTokenInfo('GUSDC', 'GUSDC|Unit|none|none'),
-        createMockTokenInfo('GUSDT', 'GUSDT|Unit|none|none')
-      ];
-
-      mockApi.getAvailableTokens.mockResolvedValue(mockTokens);
-      mockApi.getQuote.mockResolvedValue(createMockSwapQuote(1000, 25000));
-
-      const opportunities = await strategy.detectOpportunitiesForSwap(swapData, currentPrice, mockApi);
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
+  it('ignores pairs that do not involve GALA', async () => {
+    const nonGalaPair = createMockTradingPair('GUSDC', 'GUSDT');
+    const opportunities = await detector.detectAllOpportunities([nonGalaPair], mockApi, new Map());
+    expect(opportunities).toHaveLength(0);
   });
 });
 
-describe('DirectArbitrageStrategy', () => {
-  let mockApi: jest.Mocked<GSwapAPI>;
-  let strategy: DirectArbitrageStrategy;
-  let balanceSnapshot: BalanceSnapshot;
-
-  beforeEach(() => {
-    mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    balanceSnapshot = createMockBalanceSnapshot();
-    strategy = new DirectArbitrageStrategy(balanceSnapshot);
-    mockApi.checkTradingFunds.mockResolvedValue({
-      hasFunds: true,
-      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
-      shortfall: 0,
-    });
-  });
-
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe('detectOpportunities', () => {
-    it('should filter pairs to only include GALA pairs', async () => {
-      const mockPairs: TradingPair[] = [
-        createMockTradingPair('GALA', 'GUSDC'),
-        createMockTradingPair('GUSDC', 'GUSDT') // This should be ignored
-      ];
-
-      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi, new Map());
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-
-  describe('detectOpportunitiesForSwap', () => {
-    it('should analyze direct arbitrage for specific swap data', async () => {
-      const swapData = createMockSwapData();
-      const currentPrice = 0.04;
-
-      const opportunities = await strategy.detectOpportunitiesForSwap(swapData, currentPrice, mockApi);
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-});
-
-describe('ArbitrageOpportunity Creation', () => {
-  it('should create opportunity with correct properties', () => {
+describe('ArbitrageOpportunity utility', () => {
+  it('creates mock opportunity with expected properties', () => {
     const opportunity = createMockArbitrageOpportunity();
 
     expect(opportunity.id).toBe('test-opportunity');
     expect(opportunity.tokenA).toBe('GALA');
     expect(opportunity.tokenB).toBe('GUSDC');
-    expect(opportunity.profitPercentage).toBe(5.13);
+    expect(opportunity.profitPercentage).toBeGreaterThan(0);
     expect(opportunity.hasFunds).toBe(true);
   });
 });
