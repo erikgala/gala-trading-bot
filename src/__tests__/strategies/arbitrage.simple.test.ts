@@ -1,200 +1,234 @@
 import {
   ArbitrageDetector,
-  CrossPairArbitrageStrategy,
-  DirectArbitrageStrategy,
-  ArbitrageOpportunity
+  ArbitrageOpportunity,
+  SimpleArbitrageStrategy,
 } from '../../strategies/arbitrage';
-import { GSwapAPI, TradingPair, TokenInfo, SwapQuote } from '../../api/gswap';
+import { GSwapAPI, TradingPair, TokenInfo } from '../../api/gswap';
 import type { BalanceSnapshot } from '../../api/gswap';
-
-const { BalanceSnapshot: RealBalanceSnapshot } = jest.requireActual<
-  typeof import('../../api/gswap')
->('../../api/gswap');
-import { 
-  createMockTokenInfo, 
-  createMockTradingPair, 
-  createMockSwapQuote, 
+import {
   createMockArbitrageOpportunity,
-  createMockSwapData
+  createMockTradingPair,
+  createMockSwapData,
 } from '../testUtils';
 
-// Mock the GSwapAPI
 jest.mock('../../api/gswap');
+
 const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 
-const createMockBalanceSnapshot = (balance = 10000): BalanceSnapshot => {
-  const balances = new Map<string, number>([['GALA|Unit|none|none', balance]]);
-  return new RealBalanceSnapshot(balances, Date.now());
+const { BalanceSnapshot: RealBalanceSnapshot, createTokenClassKey } = jest.requireActual<
+  typeof import('../../api/gswap')
+>('../../api/gswap');
+
+const createMockBalanceSnapshot = (balances: Record<string, number>): BalanceSnapshot => {
+  return new RealBalanceSnapshot(new Map(Object.entries(balances)), Date.now());
 };
 
-describe('ArbitrageDetector', () => {
-  let mockApi: jest.Mocked<GSwapAPI>;
-  let detector: ArbitrageDetector;
-  let balanceSnapshot: BalanceSnapshot;
+const buildQuote = (inputToken: string, outputToken: string, inputAmount: number, outputAmount: number) => ({
+  inputToken,
+  outputToken,
+  inputAmount,
+  outputAmount,
+  priceImpact: 0,
+  feeTier: 3000,
+  route: [inputToken, outputToken],
+});
+
+describe('Simple arbitrage detection', () => {
+  let api: jest.Mocked<GSwapAPI>;
 
   beforeEach(() => {
-    mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    balanceSnapshot = createMockBalanceSnapshot();
-    mockApi.getBalanceSnapshot.mockResolvedValue(balanceSnapshot);
-    mockApi.checkTradingFunds.mockResolvedValue({
-      hasFunds: true,
-      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
-      shortfall: 0,
-    });
-    detector = new ArbitrageDetector();
+    api = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
+    api.createTokenClassKey.mockImplementation((data) => createTokenClassKey(data));
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  describe('detectAllOpportunities', () => {
-    it('should detect opportunities using all strategies', async () => {
-      const mockPairs: TradingPair[] = [
-        createMockTradingPair('GALA', 'GUSDC')
-      ];
+  describe('ArbitrageDetector', () => {
+    const galaClass = 'GALA|Unit|none|none';
+    const gusdcClass = 'GUSDC|Unit|none|none';
 
-      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi, new Map());
+    let detector: ArbitrageDetector;
 
-      expect(Array.isArray(opportunities)).toBe(true);
+    beforeEach(() => {
+      const snapshot = createMockBalanceSnapshot({
+        [galaClass]: 1_000,
+        [gusdcClass]: 5_000,
+      });
+      api.getBalanceSnapshot.mockResolvedValue(snapshot);
+      api.checkTradingFunds.mockImplementation(async (amount, tokenClass) => ({
+        hasFunds: true,
+        currentBalance: snapshot.getBalance(tokenClass),
+        shortfall: Math.max(0, amount - snapshot.getBalance(tokenClass)),
+      }));
+
+      detector = new ArbitrageDetector();
     });
 
-    it('should return empty array when no strategies find opportunities', async () => {
-      const mockPairs: TradingPair[] = [];
-      
-      const opportunities = await detector.detectAllOpportunities(mockPairs, mockApi, new Map());
+    it('detects profitable round-trip opportunities across trading pairs', async () => {
+      const pairs: TradingPair[] = [createMockTradingPair('GALA', 'GUSDC')];
+
+      api.getQuote.mockImplementation(async (inputToken, outputToken, amount) => {
+        if (inputToken === galaClass && outputToken === gusdcClass && amount === 1_000) {
+          return buildQuote(inputToken, outputToken, amount, 5_000);
+        }
+
+        if (inputToken === gusdcClass && outputToken === galaClass && amount === 5_000) {
+          return buildQuote(inputToken, outputToken, amount, 1_010);
+        }
+
+        if (inputToken === gusdcClass && outputToken === galaClass && amount === 1_000) {
+          return buildQuote(inputToken, outputToken, amount, 180);
+        }
+
+        if (inputToken === galaClass && outputToken === gusdcClass && amount === 180) {
+          return buildQuote(inputToken, outputToken, amount, 900);
+        }
+
+        return null;
+      });
+
+      const opportunities = await detector.detectAllOpportunities(pairs, api, new Map());
+
+      expect(opportunities).toHaveLength(1);
+      expect(opportunities[0].tokenA).toBe('GALA');
+      expect(opportunities[0].tokenB).toBe('GUSDC');
+      expect(opportunities[0].profitPercentage).toBeCloseTo(1, 5);
+      expect(opportunities[0].estimatedProfit).toBeCloseTo(10, 5);
+    });
+
+    it('returns an empty list when no profitable cycle exists', async () => {
+      const pairs: TradingPair[] = [createMockTradingPair('GALA', 'GUSDC')];
+
+      api.getQuote.mockImplementation(async (inputToken, outputToken, amount) => {
+        if (inputToken === galaClass && outputToken === gusdcClass && amount === 1_000) {
+          return buildQuote(inputToken, outputToken, amount, 5_000);
+        }
+
+        if (inputToken === gusdcClass && outputToken === galaClass && amount === 5_000) {
+          return buildQuote(inputToken, outputToken, amount, 995);
+        }
+
+        if (inputToken === gusdcClass && outputToken === galaClass && amount === 1_000) {
+          return buildQuote(inputToken, outputToken, amount, 200);
+        }
+
+        if (inputToken === galaClass && outputToken === gusdcClass && amount === 200) {
+          return buildQuote(inputToken, outputToken, amount, 950);
+        }
+
+        return null;
+      });
+
+      const opportunities = await detector.detectAllOpportunities(pairs, api, new Map());
 
       expect(opportunities).toHaveLength(0);
     });
   });
 
-  describe('detectOpportunitiesForSwap', () => {
-    it('should detect opportunities for specific swap data', async () => {
-      const swapData = createMockSwapData();
-      const currentPrice = 0.04;
+  describe('SimpleArbitrageStrategy', () => {
+    const galaClass = 'GALA|Unit|none|none';
+    const gusdcClass = 'GUSDC|Unit|none|none';
 
-      const opportunities = await detector.detectOpportunitiesForSwap(swapData, currentPrice, mockApi);
+    let strategy: SimpleArbitrageStrategy;
+    let snapshot: BalanceSnapshot;
+    let tokenA: TokenInfo;
+    let tokenB: TokenInfo;
 
-      expect(Array.isArray(opportunities)).toBe(true);
+    beforeEach(() => {
+      snapshot = createMockBalanceSnapshot({
+        [galaClass]: 1_000,
+        [gusdcClass]: 5_000,
+      });
+      strategy = new SimpleArbitrageStrategy(snapshot);
+
+      tokenA = {
+        symbol: 'GALA',
+        name: 'GALA',
+        decimals: 18,
+        tokenClass: galaClass,
+        price: 0.04,
+        priceChange24h: 0,
+      };
+
+      tokenB = {
+        symbol: 'GUSDC',
+        name: 'GUSDC',
+        decimals: 6,
+        tokenClass: gusdcClass,
+        price: 1,
+        priceChange24h: 0,
+      };
+
+      api.checkTradingFunds.mockImplementation(async (amount, tokenClass) => ({
+        hasFunds: true,
+        currentBalance: snapshot.getBalance(tokenClass),
+        shortfall: Math.max(0, amount - snapshot.getBalance(tokenClass)),
+      }));
+    });
+
+    it('builds opportunities when the round trip is profitable', async () => {
+      api.getQuote.mockImplementation(async (inputToken, outputToken, amount) => {
+        if (inputToken === galaClass && outputToken === gusdcClass && amount === 1_000) {
+          return buildQuote(inputToken, outputToken, amount, 5_000);
+        }
+
+        if (inputToken === gusdcClass && outputToken === galaClass && amount === 5_000) {
+          return buildQuote(inputToken, outputToken, amount, 1_020);
+        }
+
+        return null;
+      });
+
+      const results = await strategy.detectOpportunities([
+        { tokenA, tokenB, tokenClassA: galaClass, tokenClassB: gusdcClass },
+      ], api);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].estimatedProfit).toBeCloseTo(20, 5);
+      expect(results[0].buyQuote.inputAmount).toBe(1_000);
+      expect(results[0].sellQuote.inputAmount).toBe(5_000);
+    });
+
+    it('provides swap-focused opportunities using live swap data', async () => {
+      api.getBalanceSnapshot.mockResolvedValue(snapshot);
+      api.getTokenInfoByClassKey.mockResolvedValueOnce(tokenA).mockResolvedValueOnce(tokenB);
+
+      api.getQuote.mockImplementation(async (inputToken, outputToken, amount) => {
+        if (inputToken === galaClass && outputToken === gusdcClass && amount === 1_000) {
+          return buildQuote(inputToken, outputToken, amount, 5_000);
+        }
+
+        if (inputToken === gusdcClass && outputToken === galaClass && amount === 5_000) {
+          return buildQuote(inputToken, outputToken, amount, 1_015);
+        }
+
+        return null;
+      });
+
+      const detector = new ArbitrageDetector([SimpleArbitrageStrategy]);
+
+      const opportunities = await detector.detectOpportunitiesForSwap(
+        createMockSwapData(),
+        0.04,
+        api,
+      );
+
+      expect(opportunities).toHaveLength(1);
+      expect(opportunities[0].currentMarketPrice).toBeCloseTo(0.04);
+      expect(opportunities[0].confidence).toBeCloseTo(opportunities[0].profitPercentage, 5);
     });
   });
 });
 
-describe('CrossPairArbitrageStrategy', () => {
-  let mockApi: jest.Mocked<GSwapAPI>;
-  let strategy: CrossPairArbitrageStrategy;
-  let balanceSnapshot: BalanceSnapshot;
-
-  beforeEach(() => {
-    mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    balanceSnapshot = createMockBalanceSnapshot();
-    strategy = new CrossPairArbitrageStrategy(balanceSnapshot);
-    mockApi.checkTradingFunds.mockResolvedValue({
-      hasFunds: true,
-      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
-      shortfall: 0,
-    });
-  });
-
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe('detectOpportunities', () => {
-    it('should filter pairs to only include GALA pairs', async () => {
-      const mockPairs: TradingPair[] = [
-        createMockTradingPair('GALA', 'GUSDC'),
-        createMockTradingPair('GUSDC', 'GUSDT') // This should be ignored
-      ];
-
-      const mockTokens: TokenInfo[] = [
-        createMockTokenInfo('GALA', 'GALA|Unit|none|none'),
-        createMockTokenInfo('GUSDC', 'GUSDC|Unit|none|none'),
-        createMockTokenInfo('GUSDT', 'GUSDT|Unit|none|none')
-      ];
-
-      mockApi.getAvailableTokens.mockResolvedValue(mockTokens);
-      mockApi.getQuote.mockResolvedValue(createMockSwapQuote(1000, 25000));
-
-      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi, new Map());
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-
-  describe('detectOpportunitiesForSwap', () => {
-    it('should analyze opportunities for specific swap data', async () => {
-      const swapData = createMockSwapData();
-      const currentPrice = 0.04;
-      const mockTokens: TokenInfo[] = [
-        createMockTokenInfo('GALA', 'GALA|Unit|none|none'),
-        createMockTokenInfo('GUSDC', 'GUSDC|Unit|none|none'),
-        createMockTokenInfo('GUSDT', 'GUSDT|Unit|none|none')
-      ];
-
-      mockApi.getAvailableTokens.mockResolvedValue(mockTokens);
-      mockApi.getQuote.mockResolvedValue(createMockSwapQuote(1000, 25000));
-
-      const opportunities = await strategy.detectOpportunitiesForSwap(swapData, currentPrice, mockApi);
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-});
-
-describe('DirectArbitrageStrategy', () => {
-  let mockApi: jest.Mocked<GSwapAPI>;
-  let strategy: DirectArbitrageStrategy;
-  let balanceSnapshot: BalanceSnapshot;
-
-  beforeEach(() => {
-    mockApi = new MockedGSwapAPI() as jest.Mocked<GSwapAPI>;
-    balanceSnapshot = createMockBalanceSnapshot();
-    strategy = new DirectArbitrageStrategy(balanceSnapshot);
-    mockApi.checkTradingFunds.mockResolvedValue({
-      hasFunds: true,
-      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
-      shortfall: 0,
-    });
-  });
-
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe('detectOpportunities', () => {
-    it('should filter pairs to only include GALA pairs', async () => {
-      const mockPairs: TradingPair[] = [
-        createMockTradingPair('GALA', 'GUSDC'),
-        createMockTradingPair('GUSDC', 'GUSDT') // This should be ignored
-      ];
-
-      const opportunities = await strategy.detectOpportunities(mockPairs, mockApi, new Map());
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-
-  describe('detectOpportunitiesForSwap', () => {
-    it('should analyze direct arbitrage for specific swap data', async () => {
-      const swapData = createMockSwapData();
-      const currentPrice = 0.04;
-
-      const opportunities = await strategy.detectOpportunitiesForSwap(swapData, currentPrice, mockApi);
-
-      expect(Array.isArray(opportunities)).toBe(true);
-    });
-  });
-});
-
-describe('ArbitrageOpportunity Creation', () => {
-  it('should create opportunity with correct properties', () => {
-    const opportunity = createMockArbitrageOpportunity();
-
+describe('ArbitrageOpportunity helpers', () => {
+  it('creates mock opportunities with the expected defaults', () => {
+    const opportunity: ArbitrageOpportunity = createMockArbitrageOpportunity();
     expect(opportunity.id).toBe('test-opportunity');
     expect(opportunity.tokenA).toBe('GALA');
     expect(opportunity.tokenB).toBe('GUSDC');
-    expect(opportunity.profitPercentage).toBe(5.13);
     expect(opportunity.hasFunds).toBe(true);
+    expect(opportunity.estimatedProfit).toBeGreaterThan(0);
   });
 });
