@@ -279,7 +279,8 @@ export class ArbitrageDetector {
 
     const maxTradeAmount = config.maxTradeAmount;
     const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenClassA, balanceSnapshot);
-    const estimatedProfit = spread * maxTradeAmount;
+    const amountToTrade = Math.min(maxTradeAmount, fundsCheck.currentBalance * 0.8);
+    const estimatedProfit = spread * amountToTrade;
 
     const marketPrice = typeof currentPrice === 'number' && currentPrice > 0 ? currentPrice : sellPrice;
     const priceDiscrepancy = marketPrice > 0 ? (Math.abs(marketPrice - sellPrice) / marketPrice) * 100 : 0;
@@ -294,7 +295,7 @@ export class ArbitrageDetector {
       sellPrice,
       profitPercentage,
       estimatedProfit,
-      maxTradeAmount,
+      maxTradeAmount: amountToTrade,
       buyQuote: quoteBA,
       sellQuote: quoteAB,
       hasFunds: fundsCheck.hasFunds,

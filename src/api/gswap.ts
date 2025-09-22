@@ -32,6 +32,8 @@ export class GSwapAPI {
       signer: this.signer,
     });
 
+    GSwap.events?.connectEventSocket();
+
     this.isMockMode = config.mockMode;
 
     this.tokenRegistry = new TokenRegistry({
@@ -46,21 +48,12 @@ export class GSwapAPI {
     });
   }
 
-  getWalletAddress(): string {
-    return config.walletAddress;
-  }
-
   async loadAvailableTokens(): Promise<void> {
     await this.tokenRegistry.loadTokens();
   }
 
   async getTokenInfoByClassKey(tokenClassKey: string): Promise<TokenInfo | null> {
     return this.tokenRegistry.getTokenInfoByClassKey(tokenClassKey);
-  }
-
-  async getTokenInfoByData(tokenData: { collection: string; category: string; type: string; additionalKey: string }): Promise<TokenInfo | null> {
-    const tokenClassKey = createTokenClassKey(tokenData);
-    return this.getTokenInfoByClassKey(tokenClassKey);
   }
 
   async getTokenInfo(symbol: string): Promise<TokenInfo | null> {
@@ -216,7 +209,6 @@ export class GSwapAPI {
       }
 
       const minOutputAmount = quote.outputAmount * (1 - slippageTolerance / 100);
-      const feeTier = Math.floor(quote.feeTier * 10000);
 
       if (this.isMockMode) {
         this.balanceManager.applyMockSwap(inputTokenClass, outputTokenClass, inputAmount, quote.outputAmount);
@@ -236,18 +228,22 @@ export class GSwapAPI {
         amountOutMinimum: minOutputAmount,
       };
 
-      const result = await this.gSwap.swaps.swap(
+      const pendingTransaction = await this.gSwap.swaps.swap(
         inputTokenClass,
         outputTokenClass,
-        feeTier,
+        quote.feeTier,
         swapParams,
         config.walletAddress,
       );
 
+      const result = await pendingTransaction.wait();
+
+      console.log('Swap result:', JSON.stringify(result, null, 2));
+
       await this.refreshBalanceSnapshot();
 
       return {
-        transactionHash: result.transactionId,
+        transactionHash: result.transactionHash,
         inputAmount,
         outputAmount: quote.outputAmount,
         actualPrice: quote.outputAmount / inputAmount,
@@ -257,49 +253,6 @@ export class GSwapAPI {
     } catch (error) {
       console.error('Failed to execute swap:', error);
       throw error;
-    }
-  }
-
-  async getCurrentPrice(inputTokenClass: string, outputTokenClass: string): Promise<number | null> {
-    try {
-      const quote = await this.getQuote(inputTokenClass, outputTokenClass, 1);
-      return quote ? quote.outputAmount : null;
-    } catch (error) {
-      console.error(`Failed to get current price for ${inputTokenClass} -> ${outputTokenClass}:`, error);
-      return null;
-    }
-  }
-
-  async isSwapProfitable(
-    inputTokenClass: string,
-    outputTokenClass: string,
-    inputAmount: number,
-    minProfitPercentage: number,
-  ): Promise<{ profitable: boolean; profitPercentage: number; quote: SwapQuote | null }> {
-    try {
-      const quote = await this.getQuote(inputTokenClass, outputTokenClass, inputAmount);
-
-      if (!quote) {
-        return { profitable: false, profitPercentage: 0, quote: null };
-      }
-
-      const profitPercentage = ((quote.outputAmount - inputAmount) / inputAmount) * 100;
-      const profitable = profitPercentage >= minProfitPercentage;
-
-      return { profitable, profitPercentage, quote };
-    } catch (error) {
-      console.error('Failed to check swap profitability:', error);
-      return { profitable: false, profitPercentage: 0, quote: null };
-    }
-  }
-
-  async getTokenBalance(tokenClass: string): Promise<number> {
-    try {
-      const snapshot = await this.getBalanceSnapshot();
-      return snapshot.getBalance(tokenClass);
-    } catch (error) {
-      console.error(`Failed to get balance for ${tokenClass}:`, error);
-      return 0;
     }
   }
 
@@ -318,11 +271,6 @@ export class GSwapAPI {
     }
 
     return this.tokenRegistry.isTokenAvailableByClassKey(tokenClassKey);
-  }
-
-  isTokenAvailableByData(tokenData: { collection: string; category: string; type: string; additionalKey: string }): boolean {
-    const tokenClassKey = createTokenClassKey(tokenData);
-    return this.isTokenAvailableByClassKey(tokenClassKey);
   }
 
   isTokenAvailable(tokenSymbol: string): boolean {
