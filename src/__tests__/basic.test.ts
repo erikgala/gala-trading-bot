@@ -84,6 +84,10 @@ describe('Basic Functionality Tests', () => {
     it('should pass directionally correct quotes to executeSwap', async () => {
       const opportunity = createMockArbitrageOpportunity();
 
+      mockApi.getQuote
+        .mockResolvedValueOnce(opportunity.quoteAToB)
+        .mockResolvedValueOnce(opportunity.quoteBToA);
+
       mockApi.executeSwap.mockResolvedValueOnce(
         createMockSwapResult('0xbuy', {
           inputAmount: opportunity.maxTradeAmount,
