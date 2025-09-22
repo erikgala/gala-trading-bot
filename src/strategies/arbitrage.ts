@@ -8,10 +8,32 @@ import {
 } from '../api/gswap';
 import { config } from '../config';
 import type { DexV3Operation } from '../streaming/types';
+import type { TriangularArbitrageOpportunity } from './triangularArbitrage';
 
 const QUOTE_CACHE_TTL_MS = 30_000;
 const TEST_TRADE_AMOUNT = 1;
 const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
+
+export type ArbitrageStrategyType = 'direct' | 'triangular';
+
+export interface BaseArbitrageOpportunity {
+  id: string;
+  strategy: ArbitrageStrategyType;
+  entryTokenClass: string;
+  entryTokenSymbol: string;
+  exitTokenClass: string;
+  exitTokenSymbol: string;
+  profitPercentage: number;
+  estimatedProfit: number;
+  maxTradeAmount: number;
+  hasFunds: boolean;
+  currentBalance: number;
+  shortfall: number;
+  timestamp: number;
+  currentMarketPrice?: number;
+  priceDiscrepancy?: number;
+  confidence?: number;
+}
 
 interface SwapExtraction {
   swapData: SwapData;
@@ -87,29 +109,21 @@ async function getQuoteFromCacheOrApi(
   return liveQuote;
 }
 
-export interface ArbitrageOpportunity {
-  id: string;
+export interface DirectArbitrageOpportunity extends BaseArbitrageOpportunity {
+  strategy: 'direct';
   tokenA: string;
   tokenB: string;
   tokenClassA: string;
   tokenClassB: string;
   buyPrice: number;
   sellPrice: number;
-  profitPercentage: number;
-  estimatedProfit: number;
-  maxTradeAmount: number;
   /** Quote for swapping tokenClassA -> tokenClassB. */
   quoteAToB: SwapQuote;
   /** Quote for swapping tokenClassB -> tokenClassA. */
   quoteBToA: SwapQuote;
-  hasFunds: boolean;
-  currentBalance: number;
-  shortfall: number;
-  timestamp: number;
-  currentMarketPrice?: number;
-  priceDiscrepancy?: number;
-  confidence?: number;
 }
+
+export type ArbitrageOpportunity = DirectArbitrageOpportunity | TriangularArbitrageOpportunity;
 
 export interface SwapData {
   tokenIn: {
@@ -293,6 +307,11 @@ export class ArbitrageDetector {
 
     return {
       id: `direct-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      strategy: 'direct',
+      entryTokenClass: tokenClassA,
+      entryTokenSymbol: tokenA,
+      exitTokenClass: tokenClassA,
+      exitTokenSymbol: tokenA,
       tokenA,
       tokenB,
       tokenClassA,

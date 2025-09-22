@@ -1,4 +1,4 @@
-import { ArbitrageOpportunity } from '../strategies/arbitrage';
+import { ArbitrageOpportunity, DirectArbitrageOpportunity } from '../strategies/arbitrage';
 import { MockWallet } from './mockWallet';
 import { MockCSVLogger } from './csvLogger';
 import { config } from '../config';
@@ -32,27 +32,40 @@ export class MockTradeExecutor {
 
     try {
       // Check if we have sufficient balance
-      if (!this.mockWallet.hasSufficientBalance(opportunity.tokenClassA, opportunity.maxTradeAmount)) {
+      const entryTokenClass =
+        opportunity.strategy === 'direct' ? opportunity.tokenClassA : opportunity.entryTokenClass;
+      const entryTokenSymbol =
+        opportunity.strategy === 'direct' ? opportunity.tokenA : opportunity.entryTokenSymbol;
+
+      if (!this.mockWallet.hasSufficientBalance(entryTokenClass, opportunity.maxTradeAmount)) {
         console.log(`❌ Insufficient balance for arbitrage trade`);
-        console.log(`   Required: ${opportunity.maxTradeAmount} ${opportunity.tokenA}`);
-        console.log(`   Available: ${this.mockWallet.getBalance(opportunity.tokenClassA)} ${opportunity.tokenA}`);
+        console.log(`   Required: ${opportunity.maxTradeAmount} ${entryTokenSymbol}`);
+        console.log(`   Available: ${this.mockWallet.getBalance(entryTokenClass)} ${entryTokenSymbol}`);
         return false;
       }
 
-      // Calculate actual trade amounts based on quotes
       const amountIn = opportunity.maxTradeAmount;
-      const amountOut = opportunity.quoteAToB.outputAmount;
-      
+      let amountOut = amountIn;
+      let price = 1;
+
+      if (this.isDirectOpportunity(opportunity)) {
+        amountOut = opportunity.quoteAToB.outputAmount;
+        price = opportunity.buyPrice;
+      } else {
+        amountOut = amountIn + opportunity.estimatedProfit;
+        price = amountOut / amountIn;
+      }
+
       // Calculate profit (simplified - in reality this would be more complex)
       const profit = opportunity.estimatedProfit;
 
       // Execute the mock trade
       const transaction = this.mockWallet.executeSwap(
-        opportunity.tokenClassA,
-        opportunity.tokenClassB,
+        entryTokenClass,
+        this.getMockOutputTokenClass(opportunity),
         amountIn,
         amountOut,
-        opportunity.buyPrice,
+        price,
         'arbitrage',
         profit
       );
@@ -164,5 +177,19 @@ export class MockTradeExecutor {
    */
   isMockModeEnabled(): boolean {
     return this.isEnabled;
+  }
+
+  private isDirectOpportunity(
+    opportunity: ArbitrageOpportunity,
+  ): opportunity is DirectArbitrageOpportunity {
+    return opportunity.strategy === 'direct';
+  }
+
+  private getMockOutputTokenClass(opportunity: ArbitrageOpportunity): string {
+    if (this.isDirectOpportunity(opportunity)) {
+      return opportunity.tokenClassB;
+    }
+
+    return opportunity.entryTokenClass;
   }
 }

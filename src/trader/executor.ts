@@ -1,5 +1,6 @@
 import { GSwapAPI, SwapQuote, SwapResult } from '../api/gswap';
-import { ArbitrageOpportunity } from '../strategies/arbitrage';
+import { ArbitrageOpportunity, DirectArbitrageOpportunity } from '../strategies/arbitrage';
+import type { TriangularArbitrageOpportunity } from '../strategies/triangularArbitrage';
 import { config } from '../config';
 
 export interface TradeExecution {
@@ -7,7 +8,8 @@ export interface TradeExecution {
   opportunity: ArbitrageOpportunity;
   buySwap?: SwapResult;
   sellSwap?: SwapResult;
-  status: 'pending' | 'buying' | 'selling' | 'completed' | 'failed' | 'cancelled';
+  intermediateSwaps?: SwapResult[];
+  status: 'pending' | 'buying' | 'selling' | 'converting' | 'completed' | 'failed' | 'cancelled';
   startTime: number;
   endTime?: number;
   actualProfit?: number;
@@ -37,7 +39,11 @@ export class TradeExecutor {
     this.activeTrades.set(execution.id, execution);
 
     try {
-      await this.runDirectArbitrage(execution);
+      if (opportunity.strategy === 'direct') {
+        await this.runDirectArbitrage(execution, opportunity);
+      } else {
+        await this.runTriangularArbitrage(execution, opportunity);
+      }
 
       if (execution.status !== 'cancelled') {
         execution.status = 'completed';
@@ -57,8 +63,10 @@ export class TradeExecutor {
     return execution;
   }
 
-  private async runDirectArbitrage(execution: TradeExecution): Promise<void> {
-    const originalOpportunity = execution.opportunity;
+  private async runDirectArbitrage(
+    execution: TradeExecution,
+    originalOpportunity: DirectArbitrageOpportunity,
+  ): Promise<void> {
     const amountToTrade = originalOpportunity.maxTradeAmount;
 
     if (!Number.isFinite(amountToTrade) || amountToTrade <= 0) {
@@ -158,6 +166,108 @@ export class TradeExecutor {
     execution.sellSwap = sellSwap;
 
     execution.actualProfit = sellSwap.outputAmount - buySwap.inputAmount;
+  }
+
+  private async runTriangularArbitrage(
+    execution: TradeExecution,
+    originalOpportunity: TriangularArbitrageOpportunity,
+  ): Promise<void> {
+    const amountToTrade = originalOpportunity.maxTradeAmount;
+
+    if (!Number.isFinite(amountToTrade) || amountToTrade <= 0) {
+      throw new Error('Invalid trade amount for opportunity');
+    }
+
+    let currentAmount = amountToTrade;
+    const refreshedQuotes: SwapQuote[] = [];
+
+    for (const leg of originalOpportunity.path) {
+      this.ensureNotCancelled(execution);
+      const quote = await this.api.getQuote(leg.fromTokenClass, leg.toTokenClass, currentAmount);
+
+      if (
+        !quote ||
+        !Number.isFinite(quote.inputAmount) ||
+        !Number.isFinite(quote.outputAmount) ||
+        quote.inputAmount <= 0 ||
+        quote.outputAmount <= 0
+      ) {
+        throw new Error('Unable to refresh quote for triangular opportunity');
+      }
+
+      refreshedQuotes.push(quote);
+      currentAmount = quote.outputAmount;
+    }
+
+    const finalAmount = currentAmount;
+    const profitAmount = finalAmount - amountToTrade;
+    const profitPercentage = (profitAmount / amountToTrade) * 100;
+
+    const refreshedOpportunity: TriangularArbitrageOpportunity = {
+      ...originalOpportunity,
+      profitPercentage,
+      estimatedProfit: profitAmount,
+      maxTradeAmount: amountToTrade,
+      path: originalOpportunity.path.map((leg, index) => ({
+        ...leg,
+        quote: refreshedQuotes[index],
+        inputAmount: refreshedQuotes[index].inputAmount,
+        outputAmount: refreshedQuotes[index].outputAmount,
+      })),
+      referenceInputAmount: amountToTrade,
+      referenceOutputAmount: finalAmount,
+    };
+
+    execution.opportunity = refreshedOpportunity;
+
+    if (
+      !Number.isFinite(profitPercentage) ||
+      !Number.isFinite(profitAmount) ||
+      profitPercentage < config.minProfitThreshold ||
+      profitAmount <= 0
+    ) {
+      this.cancelExecution(execution, 'Triangular opportunity no longer profitable after re-quoting');
+      return;
+    }
+
+    execution.intermediateSwaps = [];
+
+    let legInputAmount = amountToTrade;
+
+    for (let index = 0; index < refreshedQuotes.length; index++) {
+      const leg = refreshedOpportunity.path[index];
+      const quote = refreshedQuotes[index];
+
+      this.ensureNotCancelled(execution);
+
+      if (index === 0) {
+        execution.status = 'buying';
+      } else if (index === refreshedQuotes.length - 1) {
+        execution.status = 'selling';
+      } else {
+        execution.status = 'converting';
+      }
+
+      const swapResult = await this.executeSwap(
+        execution,
+        leg.fromTokenClass,
+        leg.toTokenClass,
+        legInputAmount,
+        quote,
+      );
+
+      if (index === 0) {
+        execution.buySwap = swapResult;
+      } else if (index === refreshedQuotes.length - 1) {
+        execution.sellSwap = swapResult;
+      } else {
+        execution.intermediateSwaps.push(swapResult);
+      }
+
+      legInputAmount = swapResult.outputAmount;
+    }
+
+    execution.actualProfit = legInputAmount - amountToTrade;
   }
 
   private async executeSwap(

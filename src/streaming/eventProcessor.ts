@@ -10,7 +10,7 @@ import { ArbitrageDetector, ArbitrageOpportunity } from '../strategies/arbitrage
 import { GSwapAPI } from '../api/gswap';
 import { TradeExecutor } from '../trader/executor';
 import { MockTradeExecutor } from '../mock/mockTradeExecutor';
-import { config } from '../config';
+import { config, getEnabledStrategyModes } from '../config';
 
 export class RealTimeEventProcessor implements EventProcessor {
   private processedBlocks: Set<number> = new Set();
@@ -18,6 +18,7 @@ export class RealTimeEventProcessor implements EventProcessor {
   private filteredBlocks = 0;
   private opportunitiesFound = 0;
   private tradesExecuted = 0;
+  private readonly enabledStrategies = getEnabledStrategyModes();
 
   constructor(
     private api: GSwapAPI,
@@ -87,6 +88,10 @@ export class RealTimeEventProcessor implements EventProcessor {
 
   private async processSwapOperation(operation: DexV3Operation): Promise<void> {
     try {
+      if (!this.enabledStrategies.includes('direct')) {
+        return;
+      }
+
       const opportunity = await this.arbitrageDetector.evaluateSwapOperation(operation, this.api);
 
       if (!opportunity) {

@@ -1,8 +1,9 @@
 import { TradeExecutor, TradeExecution } from '../../trader/executor';
 import { GSwapAPI, SwapQuote } from '../../api/gswap';
-import { ArbitrageOpportunity } from '../../strategies/arbitrage';
+import { DirectArbitrageOpportunity } from '../../strategies/arbitrage';
 import {
   createMockArbitrageOpportunity,
+  createMockTriangularOpportunity,
   createMockSwapResult,
   createMockSwapQuote,
 } from '../testUtils';
@@ -23,10 +24,10 @@ describe('TradeExecutor', () => {
     jest.clearAllMocks();
   });
 
-  const createOpportunity = (): ArbitrageOpportunity => createMockArbitrageOpportunity();
+  const createOpportunity = (): DirectArbitrageOpportunity => createMockArbitrageOpportunity();
 
   const primeQuotes = (
-    opportunity: ArbitrageOpportunity,
+    opportunity: DirectArbitrageOpportunity,
     overrides: { buyQuote?: SwapQuote; sellQuote?: SwapQuote } = {}
   ): { buyQuote: SwapQuote; sellQuote: SwapQuote } => {
     const buyQuote = overrides.buyQuote ?? opportunity.quoteAToB;
@@ -143,8 +144,11 @@ describe('TradeExecutor', () => {
       expect(execution.endTime).toBeDefined();
       expect(mockApi.executeSwap).not.toHaveBeenCalled();
       expect(mockApi.getQuote).toHaveBeenCalledTimes(2);
-      expect(execution.opportunity.quoteAToB).toEqual(losingBuyQuote);
-      expect(execution.opportunity.quoteBToA).toEqual(losingSellQuote);
+      expect(execution.opportunity.strategy).toBe('direct');
+      if (execution.opportunity.strategy === 'direct') {
+        expect(execution.opportunity.quoteAToB).toEqual(losingBuyQuote);
+        expect(execution.opportunity.quoteBToA).toEqual(losingSellQuote);
+      }
     });
 
     it('cancels execution when trade is cancelled mid-flight', async () => {
@@ -182,7 +186,40 @@ describe('TradeExecutor', () => {
 
       const activeTrades = executor.getActiveTrades();
       expect(activeTrades).toHaveLength(1);
-      expect(['pending', 'buying', 'selling', 'completed', 'failed', 'cancelled']).toContain(activeTrades[0].status);
+      expect(['pending', 'buying', 'selling', 'converting', 'completed', 'failed', 'cancelled']).toContain(
+        activeTrades[0].status,
+      );
+    });
+  });
+
+  describe('triangular arbitrage execution', () => {
+    it('executes all legs successfully', async () => {
+      const opportunity = createMockTriangularOpportunity();
+      const triangularQuotes: SwapQuote[] = [
+        createMockSwapQuote(opportunity.maxTradeAmount, 1100, 'GALA|Unit|none|none', 'GUSDC|Unit|none|none'),
+        createMockSwapQuote(1100, 900, 'GUSDC|Unit|none|none', 'GWETH|Unit|none|none'),
+        createMockSwapQuote(900, 1050, 'GWETH|Unit|none|none', 'GALA|Unit|none|none'),
+      ];
+
+      triangularQuotes.forEach(quote => mockApi.getQuote.mockResolvedValueOnce(quote));
+
+      const swapResults = [
+        createMockSwapResult('0xleg1', { inputAmount: opportunity.maxTradeAmount, outputAmount: 1100 }),
+        createMockSwapResult('0xleg2', { inputAmount: 1100, outputAmount: 900 }),
+        createMockSwapResult('0xleg3', { inputAmount: 900, outputAmount: 1050 }),
+      ];
+
+      swapResults.forEach(result => mockApi.executeSwap.mockResolvedValueOnce(result));
+
+      const execution = await executor.executeArbitrage(opportunity);
+
+      expect(execution.status).toBe('completed');
+      expect(execution.buySwap).toEqual(swapResults[0]);
+      expect(execution.intermediateSwaps).toHaveLength(1);
+      expect(execution.intermediateSwaps?.[0]).toEqual(swapResults[1]);
+      expect(execution.sellSwap).toEqual(swapResults[2]);
+      expect(execution.actualProfit).toBeCloseTo(50, 5);
+      expect(mockApi.executeSwap).toHaveBeenCalledTimes(3);
     });
   });
 

@@ -76,9 +76,12 @@ describe('ArbitrageDetector', () => {
     const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
 
     expect(opportunities).toHaveLength(1);
-    expect(opportunities[0].tokenA).toBe('GALA');
-    expect(opportunities[0].tokenB).toBe('GUSDC');
-    expect(opportunities[0].profitPercentage).toBeGreaterThan(0);
+    expect(opportunities[0].strategy).toBe('direct');
+    if (opportunities[0].strategy === 'direct') {
+      expect(opportunities[0].tokenA).toBe('GALA');
+      expect(opportunities[0].tokenB).toBe('GUSDC');
+      expect(opportunities[0].profitPercentage).toBeGreaterThan(0);
+    }
   });
 
   it('returns empty array when no profitable spread exists', async () => {
@@ -123,8 +126,11 @@ describe('ArbitrageDetector', () => {
     const opportunity = await detector.evaluateSwapOperation(operation, mockApi);
 
     expect(opportunity).not.toBeNull();
-    expect(opportunity?.tokenA).toBe('GALA');
-    expect(opportunity?.tokenB).toBe('GUSDC');
+    expect(opportunity?.strategy).toBe('direct');
+    if (opportunity?.strategy === 'direct') {
+      expect(opportunity.tokenA).toBe('GALA');
+      expect(opportunity.tokenB).toBe('GUSDC');
+    }
   });
 
   it('detects direct opportunities across trading pairs', async () => {
@@ -138,8 +144,11 @@ describe('ArbitrageDetector', () => {
     const opportunities = await detector.detectAllOpportunities([DIRECT_PAIR], mockApi, new Map());
 
     expect(opportunities).toHaveLength(1);
-    expect(opportunities[0].tokenClassA).toBe('GALA|Unit|none|none');
-    expect(opportunities[0].tokenClassB).toBe('GUSDC|Unit|none|none');
+    expect(opportunities[0].strategy).toBe('direct');
+    if (opportunities[0].strategy === 'direct') {
+      expect(opportunities[0].tokenClassA).toBe('GALA|Unit|none|none');
+      expect(opportunities[0].tokenClassB).toBe('GUSDC|Unit|none|none');
+    }
   });
 
   it('ignores pairs that do not involve GALA', async () => {
@@ -154,8 +163,11 @@ describe('ArbitrageOpportunity utility', () => {
     const opportunity = createMockArbitrageOpportunity();
 
     expect(opportunity.id).toBe('test-opportunity');
-    expect(opportunity.tokenA).toBe('GALA');
-    expect(opportunity.tokenB).toBe('GUSDC');
+    expect(opportunity.strategy).toBe('direct');
+    if (opportunity.strategy === 'direct') {
+      expect(opportunity.tokenA).toBe('GALA');
+      expect(opportunity.tokenB).toBe('GUSDC');
+    }
     expect(opportunity.profitPercentage).toBeGreaterThan(0);
     expect(opportunity.hasFunds).toBe(true);
   });

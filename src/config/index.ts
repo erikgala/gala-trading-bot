@@ -7,13 +7,14 @@ export interface BotConfig {
   // Wallet Configuration
   privateKey: string;
   walletAddress: string;
-  
+
   // Trading Configuration
   minProfitThreshold: number; // Minimum profit percentage to execute trades
   maxTradeAmount: number; // Maximum amount to trade per opportunity
   pollingInterval: number; // Polling interval in milliseconds
   slippageTolerance: number; // Slippage tolerance percentage (e.g., 5 for 5%)
   balanceRefreshInterval: number; // How often to refresh cached wallet balances
+  arbitrageStrategy: StrategySelection;
   
   // Risk Management
   maxConcurrentTrades: number;
@@ -31,6 +32,8 @@ export interface BotConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
 
+export type StrategySelection = 'direct' | 'triangular' | 'both';
+
 export const config: BotConfig = {
   privateKey: process.env.PRIVATE_KEY || '',
   walletAddress: process.env.WALLET_ADDRESS || '',
@@ -40,6 +43,7 @@ export const config: BotConfig = {
   pollingInterval: parseInt(process.env.POLLING_INTERVAL || '5000'), // 5 seconds
   slippageTolerance: parseFloat(process.env.SLIPPAGE_TOLERANCE || '5.0'), // 5%
   balanceRefreshInterval: parseInt(process.env.BALANCE_REFRESH_INTERVAL || '0'), // 0 = disabled
+  arbitrageStrategy: (process.env.ARBITRAGE_STRATEGY as StrategySelection) || 'direct',
   
   maxConcurrentTrades: parseInt(process.env.MAX_CONCURRENT_TRADES || '3'),
   stopLossPercentage: parseFloat(process.env.STOP_LOSS_PERCENTAGE || '5.0'), // 5%
@@ -82,5 +86,22 @@ export function validateConfig(): void {
 
   if (config.balanceRefreshInterval < 0) {
     throw new Error('BALANCE_REFRESH_INTERVAL must be 0 or greater');
+  }
+
+  const validStrategies: StrategySelection[] = ['direct', 'triangular', 'both'];
+  if (!validStrategies.includes(config.arbitrageStrategy)) {
+    throw new Error('ARBITRAGE_STRATEGY must be one of direct, triangular, or both');
+  }
+}
+
+export function getEnabledStrategyModes(): Array<'direct' | 'triangular'> {
+  switch (config.arbitrageStrategy) {
+    case 'direct':
+      return ['direct'];
+    case 'triangular':
+      return ['triangular'];
+    case 'both':
+    default:
+      return ['direct', 'triangular'];
   }
 }
