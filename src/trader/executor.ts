@@ -62,10 +62,10 @@ export class TradeExecutor {
 
     if(opportunity.maxTradeAmount <= 0 || opportunity.profitPercentage <= config.minProfitThreshold) {
       execution.status = 'failed';
-      execution.error = 'Insufficient funds';
+      execution.error = 'Insufficient parameters';
       execution.endTime = Date.now();
 
-      console.log(`❌ Insufficient funds for arbitrage trade`);
+      console.log(`❌ Insufficient parameters for arbitrage trade`);
       console.log(`   Required: ${opportunity.maxTradeAmount} ${opportunity.tokenA}`);
       console.log(`   Available: ${opportunity.currentBalance.toFixed(2)} ${opportunity.tokenA}`);
       console.log(`   Shortfall: ${opportunity.shortfall.toFixed(2)} ${opportunity.tokenA}`);
