@@ -282,6 +282,10 @@ export class ArbitrageDetector {
     const amountToTrade = Math.min(maxTradeAmount, fundsCheck.currentBalance * 0.8);
     const estimatedProfit = spread * amountToTrade;
 
+    if(amountToTrade <= 0) {
+      return null;
+    }
+
     const marketPrice = typeof currentPrice === 'number' && currentPrice > 0 ? currentPrice : sellPrice;
     const priceDiscrepancy = marketPrice > 0 ? (Math.abs(marketPrice - sellPrice) / marketPrice) * 100 : 0;
 

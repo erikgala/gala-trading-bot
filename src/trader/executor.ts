@@ -60,21 +60,6 @@ export class TradeExecutor {
   private async runDirectArbitrage(execution: TradeExecution): Promise<void> {
     const { opportunity } = execution;
 
-    if(opportunity.maxTradeAmount <= 0 || opportunity.profitPercentage <= config.minProfitThreshold) {
-      execution.status = 'failed';
-      execution.error = 'Insufficient parameters';
-      execution.endTime = Date.now();
-
-      console.log(`❌ Insufficient parameters for arbitrage trade`);
-      console.log(`   Required: ${opportunity.maxTradeAmount} ${opportunity.tokenA}`);
-      console.log(`   Available: ${opportunity.currentBalance.toFixed(2)} ${opportunity.tokenA}`);
-      console.log(`   Shortfall: ${opportunity.shortfall.toFixed(2)} ${opportunity.tokenA}`);
-      console.log(`   Potential profit: ${opportunity.estimatedProfit.toFixed(2)}`);
-      console.log('');
-
-      return;
-    }
-
     this.ensureNotCancelled(execution);
     execution.status = 'buying';
     const buySwap = await this.executeSwap(
