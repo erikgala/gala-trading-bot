@@ -83,6 +83,8 @@ export class TradeExecutor {
     execution.sellSwap = sellSwap;
 
     execution.actualProfit = sellSwap.outputAmount - buySwap.inputAmount;
+
+
   }
 
   private async executeSwap(
@@ -102,11 +104,17 @@ export class TradeExecutor {
       quote
     );
 
-    if (!result || !result.transactionHash) {
+    if (!result?.transactionHash) {
       throw new Error('Swap execution failed');
     }
 
     this.ensureNotCancelled(execution);
+
+    console.log(`✅ Swap executed successfully: ${result.transactionHash}`);
+    console.log(`   Input: ${result.inputAmount}`);
+    console.log(`   Output: ${result.outputAmount}`);
+    console.log(`   Price: ${result.actualPrice.toFixed(6)}`);
+    
     return result;
   }
 

@@ -163,6 +163,10 @@ export class ArbitrageDetector {
       return [];
     }
 
+    if(swapData.recipient === config.walletAddress) {
+      return [];
+    }
+
     if (
       !api.isTokenAvailableByClassKey(tokenInClassKey) ||
       !api.isTokenAvailableByClassKey(tokenOutClassKey)
