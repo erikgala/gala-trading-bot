@@ -98,8 +98,10 @@ export interface ArbitrageOpportunity {
   profitPercentage: number;
   estimatedProfit: number;
   maxTradeAmount: number;
-  buyQuote: SwapQuote;
-  sellQuote: SwapQuote;
+  /** Quote for swapping tokenClassA -> tokenClassB. */
+  quoteAToB: SwapQuote;
+  /** Quote for swapping tokenClassB -> tokenClassA. */
+  quoteBToA: SwapQuote;
   hasFunds: boolean;
   currentBalance: number;
   shortfall: number;
@@ -300,8 +302,8 @@ export class ArbitrageDetector {
       profitPercentage,
       estimatedProfit,
       maxTradeAmount: amountToTrade,
-      buyQuote: quoteBA,
-      sellQuote: quoteAB,
+      quoteAToB: quoteAB,
+      quoteBToA: quoteBA,
       hasFunds: fundsCheck.hasFunds,
       currentBalance: fundsCheck.currentBalance,
       shortfall: fundsCheck.shortfall,

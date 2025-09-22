@@ -41,7 +41,7 @@ export class MockTradeExecutor {
 
       // Calculate actual trade amounts based on quotes
       const amountIn = opportunity.maxTradeAmount;
-      const amountOut = opportunity.buyQuote.outputAmount;
+      const amountOut = opportunity.quoteAToB.outputAmount;
       
       // Calculate profit (simplified - in reality this would be more complex)
       const profit = opportunity.estimatedProfit;
