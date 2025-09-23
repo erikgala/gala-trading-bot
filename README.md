@@ -88,6 +88,7 @@ Create a `.env` file based on `env.example`:
 | `SLIPPAGE_TOLERANCE` | Slippage tolerance percentage | `5.0` |
 | `MAX_CONCURRENT_TRADES` | Maximum concurrent trades | `3` |
 | `STOP_LOSS_PERCENTAGE` | Stop-loss percentage | `5.0` |
+| `ARBITRAGE_STRATEGY` | Active strategies (`direct`, `triangular`, `both`) | `direct` |
 | `LOG_LEVEL` | Logging level | `info` |
 
 ### Mock Trading Settings
@@ -135,6 +136,9 @@ Detects price differences between different trading pairs for the same token.
 
 ### Direct Arbitrage
 Identifies profitable bid-ask spreads within the same trading pair.
+
+### Triangular Arbitrage
+Cycles through three tokens (e.g., `GALA -> Token X -> Token Y -> GALA`) to exploit pricing inefficiencies while caching quote data for efficiency.
 
 ## gSwap SDK Integration
 

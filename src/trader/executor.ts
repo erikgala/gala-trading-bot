@@ -1,5 +1,6 @@
 import { GSwapAPI, SwapQuote, SwapResult } from '../api/gswap';
-import { ArbitrageOpportunity } from '../strategies/arbitrage';
+import { ArbitrageOpportunity, DirectArbitrageOpportunity } from '../strategies/arbitrage';
+import type { TriangularArbitrageOpportunity } from '../strategies/triangularArbitrage';
 import { config } from '../config';
 
 export interface TradeExecution {
@@ -7,7 +8,8 @@ export interface TradeExecution {
   opportunity: ArbitrageOpportunity;
   buySwap?: SwapResult;
   sellSwap?: SwapResult;
-  status: 'pending' | 'buying' | 'selling' | 'completed' | 'failed' | 'cancelled';
+  intermediateSwaps?: SwapResult[];
+  status: 'pending' | 'buying' | 'selling' | 'converting' | 'completed' | 'failed' | 'cancelled';
   startTime: number;
   endTime?: number;
   actualProfit?: number;
@@ -16,6 +18,7 @@ export interface TradeExecution {
 
 export class TradeExecutor {
   private readonly activeTrades = new Map<string, TradeExecution>();
+  private readonly tradeHistory: TradeExecution[] = [];
 
   constructor(private readonly api: GSwapAPI) {}
 
@@ -37,7 +40,11 @@ export class TradeExecutor {
     this.activeTrades.set(execution.id, execution);
 
     try {
-      await this.runDirectArbitrage(execution);
+      if (opportunity.strategy === 'direct') {
+        await this.runDirectArbitrage(execution, opportunity);
+      } else {
+        await this.runTriangularArbitrage(execution, opportunity);
+      }
 
       if (execution.status !== 'cancelled') {
         execution.status = 'completed';
@@ -52,112 +59,165 @@ export class TradeExecutor {
         execution.error = error instanceof Error ? error.message : 'Unknown error';
         execution.endTime = Date.now();
       }
+    } finally {
+      this.finalizeExecution(execution);
     }
 
     return execution;
   }
 
-  private async runDirectArbitrage(execution: TradeExecution): Promise<void> {
-    const originalOpportunity = execution.opportunity;
+  private async runDirectArbitrage(
+    execution: TradeExecution,
+    originalOpportunity: DirectArbitrageOpportunity,
+  ): Promise<void> {
     const amountToTrade = originalOpportunity.maxTradeAmount;
 
     if (!Number.isFinite(amountToTrade) || amountToTrade <= 0) {
       throw new Error('Invalid trade amount for opportunity');
     }
 
-    this.ensureNotCancelled(execution);
-    const refreshedBuyQuote = await this.api.getQuote(
-      originalOpportunity.tokenClassA,
-      originalOpportunity.tokenClassB,
-      amountToTrade
-    );
-
     if (
-      !refreshedBuyQuote ||
-      !Number.isFinite(refreshedBuyQuote.outputAmount) ||
-      !Number.isFinite(refreshedBuyQuote.inputAmount) ||
-      refreshedBuyQuote.inputAmount <= 0 ||
-      refreshedBuyQuote.outputAmount <= 0
+      !Number.isFinite(originalOpportunity.profitPercentage) ||
+      originalOpportunity.profitPercentage < config.minProfitThreshold ||
+      !Number.isFinite(originalOpportunity.estimatedProfit) ||
+      originalOpportunity.estimatedProfit <= 0
     ) {
-      throw new Error('Unable to refresh buy quote for opportunity');
-    }
-
-    this.ensureNotCancelled(execution);
-    const refreshedSellQuote = await this.api.getQuote(
-      originalOpportunity.tokenClassB,
-      originalOpportunity.tokenClassA,
-      refreshedBuyQuote.outputAmount
-    );
-
-    if (
-      !refreshedSellQuote ||
-      !Number.isFinite(refreshedSellQuote.outputAmount) ||
-      !Number.isFinite(refreshedSellQuote.inputAmount) ||
-      refreshedSellQuote.inputAmount <= 0 ||
-      refreshedSellQuote.outputAmount <= 0
-    ) {
-      throw new Error('Unable to refresh sell quote for opportunity');
-    }
-
-    const sellRate = refreshedBuyQuote.outputAmount / refreshedBuyQuote.inputAmount;
-    const buyRate = refreshedSellQuote.outputAmount / refreshedSellQuote.inputAmount;
-
-    if (!Number.isFinite(sellRate) || !Number.isFinite(buyRate) || sellRate <= 0 || buyRate <= 0) {
-      throw new Error('Invalid refreshed quote rates');
-    }
-
-    const buyPrice = 1 / buyRate;
-    const sellPrice = sellRate;
-    const spread = sellPrice - buyPrice;
-    const profitPercentage = (spread / buyPrice) * 100;
-    const estimatedProfit = spread * amountToTrade;
-
-    const refreshedOpportunity: ArbitrageOpportunity = {
-      ...originalOpportunity,
-      buyPrice,
-      sellPrice,
-      profitPercentage,
-      estimatedProfit,
-      quoteAToB: refreshedBuyQuote,
-      quoteBToA: refreshedSellQuote,
-      maxTradeAmount: amountToTrade,
-    };
-
-    execution.opportunity = refreshedOpportunity;
-
-    if (
-      !Number.isFinite(profitPercentage) ||
-      !Number.isFinite(estimatedProfit) ||
-      profitPercentage < config.minProfitThreshold ||
-      estimatedProfit <= 0
-    ) {
-      this.cancelExecution(execution, 'Opportunity no longer profitable after re-quoting');
+      this.cancelExecution(execution, 'Opportunity no longer meets profit requirements');
       return;
     }
+
+    const buyQuote = this.validateQuote(
+      originalOpportunity.quoteAToB,
+      originalOpportunity.tokenClassA,
+      originalOpportunity.tokenClassB,
+      amountToTrade,
+    );
 
     this.ensureNotCancelled(execution);
     execution.status = 'buying';
     const buySwap = await this.executeSwap(
       execution,
-      refreshedOpportunity.tokenClassA,
-      refreshedOpportunity.tokenClassB,
+      originalOpportunity.tokenClassA,
+      originalOpportunity.tokenClassB,
       amountToTrade,
-      refreshedOpportunity.quoteAToB
+      buyQuote
     );
     execution.buySwap = buySwap;
+
+    const sellInputAmount = buySwap.outputAmount;
+    const sellQuote = this.validateQuote(
+      originalOpportunity.quoteBToA,
+      originalOpportunity.tokenClassB,
+      originalOpportunity.tokenClassA,
+      sellInputAmount,
+    );
 
     this.ensureNotCancelled(execution);
     execution.status = 'selling';
     const sellSwap = await this.executeSwap(
       execution,
-      refreshedOpportunity.tokenClassB,
-      refreshedOpportunity.tokenClassA,
-      buySwap.outputAmount,
-      refreshedOpportunity.quoteBToA
+      originalOpportunity.tokenClassB,
+      originalOpportunity.tokenClassA,
+      sellInputAmount,
+      sellQuote
     );
     execution.sellSwap = sellSwap;
 
     execution.actualProfit = sellSwap.outputAmount - buySwap.inputAmount;
+  }
+
+  private async runTriangularArbitrage(
+    execution: TradeExecution,
+    originalOpportunity: TriangularArbitrageOpportunity,
+  ): Promise<void> {
+    const amountToTrade = originalOpportunity.maxTradeAmount;
+
+    if (!Number.isFinite(amountToTrade) || amountToTrade <= 0) {
+      throw new Error('Invalid trade amount for opportunity');
+    }
+
+    if (
+      !Number.isFinite(originalOpportunity.profitPercentage) ||
+      originalOpportunity.profitPercentage < config.minProfitThreshold ||
+      !Number.isFinite(originalOpportunity.estimatedProfit) ||
+      originalOpportunity.estimatedProfit <= 0
+    ) {
+      this.cancelExecution(execution, 'Triangular opportunity no longer meets profit requirements');
+      return;
+    }
+
+    execution.intermediateSwaps = [];
+
+    let currentAmount = amountToTrade;
+
+    for (let index = 0; index < originalOpportunity.path.length; index++) {
+      const leg = originalOpportunity.path[index];
+      const expectedInputAmount =
+        index === 0 ? amountToTrade : originalOpportunity.path[index - 1].quote.outputAmount;
+      const quote = this.validateQuote(
+        leg.quote,
+        leg.fromTokenClass,
+        leg.toTokenClass,
+        expectedInputAmount,
+      );
+
+      this.ensureNotCancelled(execution);
+
+      if (index === 0) {
+        execution.status = 'buying';
+      } else if (index === originalOpportunity.path.length - 1) {
+        execution.status = 'selling';
+      } else {
+        execution.status = 'converting';
+      }
+
+      const swapResult = await this.executeSwap(
+        execution,
+        leg.fromTokenClass,
+        leg.toTokenClass,
+        currentAmount,
+        quote,
+      );
+
+      if (index === 0) {
+        execution.buySwap = swapResult;
+      } else if (index === originalOpportunity.path.length - 1) {
+        execution.sellSwap = swapResult;
+      } else {
+        execution.intermediateSwaps.push(swapResult);
+      }
+
+      currentAmount = swapResult.outputAmount;
+    }
+
+    execution.actualProfit = currentAmount - amountToTrade;
+  }
+
+  private validateQuote(
+    quote: SwapQuote | undefined,
+    inputTokenClass: string,
+    outputTokenClass: string,
+    expectedInputAmount: number,
+  ): SwapQuote {
+    if (
+      !quote ||
+      quote.inputToken !== inputTokenClass ||
+      quote.outputToken !== outputTokenClass ||
+      !Number.isFinite(quote.inputAmount) ||
+      !Number.isFinite(quote.outputAmount) ||
+      quote.inputAmount <= 0 ||
+      quote.outputAmount <= 0
+    ) {
+      throw new Error('Invalid cached quote for opportunity');
+    }
+
+    const tolerance = Math.max(1e-8, Math.abs(expectedInputAmount) * 1e-6);
+
+    if (Math.abs(quote.inputAmount - expectedInputAmount) > tolerance) {
+      throw new Error('Cached quote amount mismatch for opportunity');
+    }
+
+    return quote;
   }
 
   private async executeSwap(
@@ -208,7 +268,7 @@ export class TradeExecutor {
   }
 
   getTradeExecution(id: string): TradeExecution | undefined {
-    return this.activeTrades.get(id);
+    return this.activeTrades.get(id) ?? this.tradeHistory.find(trade => trade.id === id);
   }
 
   async cancelTradeExecution(id: string): Promise<boolean> {
@@ -235,19 +295,21 @@ export class TradeExecutor {
     averageProfit: number;
     successRate: number;
   } {
-    const trades = this.getActiveTrades();
-    const completedTrades = trades.filter(trade => trade.status === 'completed');
-    const failedTrades = trades.filter(trade => trade.status === 'failed');
+    const activeTrades = this.getActiveTrades();
+    const historicalTrades = [...this.tradeHistory];
+    const completedTrades = historicalTrades.filter(trade => trade.status === 'completed');
+    const failedTrades = historicalTrades.filter(trade => trade.status === 'failed');
 
+    const totalTrades = historicalTrades.length + activeTrades.length;
     const totalProfit = completedTrades.reduce(
       (sum, trade) => sum + (trade.actualProfit ?? 0),
       0
     );
     const averageProfit = completedTrades.length > 0 ? totalProfit / completedTrades.length : 0;
-    const successRate = trades.length > 0 ? (completedTrades.length / trades.length) * 100 : 0;
+    const successRate = totalTrades > 0 ? (completedTrades.length / totalTrades) * 100 : 0;
 
     return {
-      totalTrades: trades.length,
+      totalTrades,
       completedTrades: completedTrades.length,
       failedTrades: failedTrades.length,
       totalProfit,
@@ -257,7 +319,8 @@ export class TradeExecutor {
   }
 
   getTradeHistory(): TradeExecution[] {
-    return this.getActiveTrades().sort((a, b) => b.startTime - a.startTime);
+    const combinedHistory = [...this.tradeHistory, ...this.getActiveTrades()];
+    return combinedHistory.sort((a, b) => b.startTime - a.startTime);
   }
 
   canExecuteTrade(): boolean {
@@ -272,5 +335,14 @@ export class TradeExecutor {
       max,
       available: Math.max(0, max - current),
     };
+  }
+
+  private finalizeExecution(execution: TradeExecution): void {
+    this.activeTrades.delete(execution.id);
+
+    const terminalStatuses: TradeExecution['status'][] = ['completed', 'failed', 'cancelled'];
+    if (terminalStatuses.includes(execution.status)) {
+      this.tradeHistory.push({ ...execution });
+    }
   }
 }

@@ -8,10 +8,31 @@ import {
 } from '../api/gswap';
 import { config } from '../config';
 import type { DexV3Operation } from '../streaming/types';
+import type { TriangularArbitrageOpportunity } from './triangularArbitrage';
 
 const QUOTE_CACHE_TTL_MS = 30_000;
-const TEST_TRADE_AMOUNT = 1;
 const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
+
+export type ArbitrageStrategyType = 'direct' | 'triangular';
+
+export interface BaseArbitrageOpportunity {
+  id: string;
+  strategy: ArbitrageStrategyType;
+  entryTokenClass: string;
+  entryTokenSymbol: string;
+  exitTokenClass: string;
+  exitTokenSymbol: string;
+  profitPercentage: number;
+  estimatedProfit: number;
+  maxTradeAmount: number;
+  hasFunds: boolean;
+  currentBalance: number;
+  shortfall: number;
+  timestamp: number;
+  currentMarketPrice?: number;
+  priceDiscrepancy?: number;
+  confidence?: number;
+}
 
 interface SwapExtraction {
   swapData: SwapData;
@@ -87,29 +108,21 @@ async function getQuoteFromCacheOrApi(
   return liveQuote;
 }
 
-export interface ArbitrageOpportunity {
-  id: string;
+export interface DirectArbitrageOpportunity extends BaseArbitrageOpportunity {
+  strategy: 'direct';
   tokenA: string;
   tokenB: string;
   tokenClassA: string;
   tokenClassB: string;
   buyPrice: number;
   sellPrice: number;
-  profitPercentage: number;
-  estimatedProfit: number;
-  maxTradeAmount: number;
   /** Quote for swapping tokenClassA -> tokenClassB. */
   quoteAToB: SwapQuote;
   /** Quote for swapping tokenClassB -> tokenClassA. */
   quoteBToA: SwapQuote;
-  hasFunds: boolean;
-  currentBalance: number;
-  shortfall: number;
-  timestamp: number;
-  currentMarketPrice?: number;
-  priceDiscrepancy?: number;
-  confidence?: number;
 }
+
+export type ArbitrageOpportunity = DirectArbitrageOpportunity | TriangularArbitrageOpportunity;
 
 export interface SwapData {
   tokenIn: {
@@ -239,60 +252,69 @@ export class ArbitrageDetector {
     quoteMap,
     currentPrice,
   }: DirectArbitrageParams): Promise<ArbitrageOpportunity | null> {
+    const maxTradeAmount = config.maxTradeAmount;
+    const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenClassA, balanceSnapshot);
+    const amountToTrade = Math.min(maxTradeAmount, fundsCheck.currentBalance * 0.8);
+
+    if (!Number.isFinite(amountToTrade) || amountToTrade <= 0) {
+      return null;
+    }
+
     const quoteAB = await getQuoteFromCacheOrApi(
       quoteMap,
       api,
       tokenClassA,
       tokenClassB,
-      TEST_TRADE_AMOUNT
+      amountToTrade
     );
+
+    if (!quoteAB || !Number.isFinite(quoteAB.outputAmount) || quoteAB.outputAmount <= 0) {
+      return null;
+    }
+
     const quoteBA = await getQuoteFromCacheOrApi(
       quoteMap,
       api,
       tokenClassB,
       tokenClassA,
-      TEST_TRADE_AMOUNT
+      quoteAB.outputAmount
     );
 
-    if (!quoteAB || !quoteBA) {
+    if (!quoteBA || !Number.isFinite(quoteBA.outputAmount) || quoteBA.outputAmount <= 0) {
       return null;
     }
 
-    const rateAB = quoteAB.outputAmount / quoteAB.inputAmount;
-    const rateBA = quoteBA.outputAmount / quoteBA.inputAmount;
+    const profitAmount = quoteBA.outputAmount - amountToTrade;
 
-    if (!isFinite(rateAB) || !isFinite(rateBA) || rateAB <= 0 || rateBA <= 0) {
+    if (!Number.isFinite(profitAmount) || profitAmount <= 0) {
       return null;
     }
 
-    const buyPrice = 1 / rateBA;
-    const sellPrice = rateAB;
-    const spread = sellPrice - buyPrice;
+    const profitPercentage = (profitAmount / amountToTrade) * 100;
 
-    if (!isFinite(spread) || spread <= 0) {
+    if (!Number.isFinite(profitPercentage) || profitPercentage < config.minProfitThreshold) {
       return null;
     }
 
-    const profitPercentage = (spread / buyPrice) * 100;
+    const buyPrice = quoteAB.inputAmount / quoteAB.outputAmount;
+    const sellPrice = quoteBA.outputAmount / quoteBA.inputAmount;
 
-    if (!isFinite(profitPercentage) || profitPercentage < config.minProfitThreshold) {
+    if (!Number.isFinite(sellPrice) || !Number.isFinite(buyPrice)) {
       return null;
     }
 
-    const maxTradeAmount = config.maxTradeAmount;
-    const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenClassA, balanceSnapshot);
-    const amountToTrade = Math.min(maxTradeAmount, fundsCheck.currentBalance * 0.8);
-    const estimatedProfit = spread * amountToTrade;
-
-    if(amountToTrade <= 0) {
-      return null;
-    }
+    const estimatedProfit = profitAmount;
 
     const marketPrice = typeof currentPrice === 'number' && currentPrice > 0 ? currentPrice : sellPrice;
     const priceDiscrepancy = marketPrice > 0 ? (Math.abs(marketPrice - sellPrice) / marketPrice) * 100 : 0;
 
     return {
       id: `direct-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      strategy: 'direct',
+      entryTokenClass: tokenClassA,
+      entryTokenSymbol: tokenA,
+      exitTokenClass: tokenClassA,
+      exitTokenSymbol: tokenA,
       tokenA,
       tokenB,
       tokenClassA,

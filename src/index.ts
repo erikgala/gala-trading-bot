@@ -1,18 +1,22 @@
 import { GSwapAPI, TradingPair, QuoteMap } from './api/gswap';
-import { ArbitrageDetector, ArbitrageOpportunity } from './strategies/arbitrage';
+import { ArbitrageDetector, ArbitrageOpportunity, DirectArbitrageOpportunity } from './strategies/arbitrage';
+import { TriangularArbitrageDetector } from './strategies/triangularArbitrage';
 import { TradeExecutor } from './trader/executor';
-import { config, validateConfig } from './config';
+import { config, validateConfig, getEnabledStrategyModes } from './config';
 
 class GalaTradingBot {
   private api: GSwapAPI;
   private detector: ArbitrageDetector;
+  private triangularDetector: TriangularArbitrageDetector;
   private executor: TradeExecutor;
   private isRunning: boolean = false;
   private pollingInterval?: NodeJS.Timeout;
+  private readonly enabledStrategies = getEnabledStrategyModes();
 
   constructor() {
     this.api = new GSwapAPI();
     this.detector = new ArbitrageDetector();
+    this.triangularDetector = new TriangularArbitrageDetector();
     this.executor = new TradeExecutor(this.api);
   }
 
@@ -36,6 +40,7 @@ class GalaTradingBot {
       console.log(`📊 Polling interval: ${config.pollingInterval}ms`);
       console.log(`💰 Min profit threshold: ${config.minProfitThreshold}%`);
       console.log(`💵 Max trade amount: ${config.maxTradeAmount}`);
+      console.log(`🎯 Enabled strategies: ${this.enabledStrategies.join(', ')}`);
       
       if (config.mockMode) {
         console.log('🎭 Mock mode enabled - trades will be simulated');
@@ -108,7 +113,7 @@ class GalaTradingBot {
       console.log(`📊 Fetched ${pairs.length} trading pairs`);
 
       // Step 2: Detect arbitrage opportunities
-      const opportunities = await this.detector.detectAllOpportunities(pairs, this.api, quoteMap);
+      const opportunities = await this.detectArbitrageOpportunities(pairs, quoteMap);
       console.log(`🔍 Found ${opportunities.length} arbitrage opportunities`);
 
       // Step 2.5: Check for opportunities without sufficient funds
@@ -142,6 +147,29 @@ class GalaTradingBot {
     }
   }
 
+  private async detectArbitrageOpportunities(
+    pairs: TradingPair[],
+    quoteMap: QuoteMap,
+  ): Promise<ArbitrageOpportunity[]> {
+    const opportunities: ArbitrageOpportunity[] = [];
+
+    if (this.enabledStrategies.includes('direct')) {
+      const directOpportunities = await this.detector.detectAllOpportunities(pairs, this.api, quoteMap);
+      opportunities.push(...directOpportunities);
+    }
+
+    if (this.enabledStrategies.includes('triangular')) {
+      const triangularOpportunities = await this.triangularDetector.detectAllOpportunities(
+        pairs,
+        this.api,
+        quoteMap,
+      );
+      opportunities.push(...triangularOpportunities);
+    }
+
+    return opportunities.sort((a, b) => b.profitPercentage - a.profitPercentage);
+  }
+
 
   private async executeOpportunities(opportunities: ArbitrageOpportunity[]): Promise<void> {
     const capacity = this.executor.getTradingCapacity();
@@ -162,12 +190,7 @@ class GalaTradingBot {
 
     for (const opportunity of opportunitiesToExecute) {
       try {
-        console.log(`\n💰 Executing opportunity: ${opportunity.tokenA} -> ${opportunity.tokenB}`);
-        console.log(`   Buy: ${opportunity.tokenClassA} @ ${opportunity.buyPrice.toFixed(6)}`);
-        console.log(`   Sell: ${opportunity.tokenClassB} @ ${opportunity.sellPrice.toFixed(6)}`);
-        console.log(`   Expected profit: ${opportunity.profitPercentage.toFixed(2)}%`);
-        console.log(`   Trade amount: ${opportunity.maxTradeAmount}`);
-        console.log(`   Balance: ${opportunity.currentBalance.toFixed(2)} ${opportunity.tokenClassA.split('|')[0]}`);
+        this.logOpportunityDetails(opportunity);
 
         this.executor.executeArbitrage(opportunity).catch(error => {
           console.error(`❌ Failed to execute opportunity ${opportunity.id}:`, error);
@@ -181,27 +204,69 @@ class GalaTradingBot {
 
   private checkFundWarnings(opportunities: ArbitrageOpportunity[]): void {
     const opportunitiesWithoutFunds = opportunities.filter(opp => !opp.hasFunds);
-    
+
     if (opportunitiesWithoutFunds.length > 0) {
       console.log('\n⚠️  FUND WARNING: Opportunities found but insufficient funds!');
       console.log('   The following opportunities cannot be executed due to insufficient balance:');
-      
+
       opportunitiesWithoutFunds.forEach(opp => {
-        const tokenSymbol = opp.tokenClassA.split('|')[0];
-        console.log(`   💰 ${opp.tokenA} -> ${opp.tokenB}: ${opp.profitPercentage.toFixed(2)}% profit`);
+        const tokenSymbol = this.getEntryTokenSymbol(opp);
+        console.log(`   💰 ${this.formatOpportunityPath(opp)}: ${opp.profitPercentage.toFixed(2)}% profit`);
         console.log(`      Required: ${opp.maxTradeAmount.toFixed(2)} ${tokenSymbol}`);
         console.log(`      Available: ${opp.currentBalance.toFixed(2)} ${tokenSymbol}`);
         console.log(`      Shortfall: ${opp.shortfall.toFixed(2)} ${tokenSymbol}`);
         console.log(`      Potential profit: ${opp.estimatedProfit.toFixed(2)}`);
         console.log('');
       });
-      
+
       console.log('   💡 To execute these trades, you need to:');
       console.log('      1. Add more tokens to your wallet');
       console.log('      2. Reduce MAX_TRADE_AMOUNT in your configuration');
       console.log('      3. Wait for smaller opportunities that match your balance');
       console.log('');
     }
+  }
+
+  private logOpportunityDetails(opportunity: ArbitrageOpportunity): void {
+    const entrySymbol = this.getEntryTokenSymbol(opportunity);
+
+    console.log(`\n💰 Executing ${opportunity.strategy} opportunity: ${this.formatOpportunityPath(opportunity)}`);
+
+    if (this.isDirectOpportunity(opportunity)) {
+      console.log(`   Buy: ${opportunity.tokenClassA} @ ${opportunity.buyPrice.toFixed(6)}`);
+      console.log(`   Sell: ${opportunity.tokenClassB} @ ${opportunity.sellPrice.toFixed(6)}`);
+    } else {
+      opportunity.path.forEach((leg, index) => {
+        console.log(
+          `   Leg ${index + 1}: ${leg.fromSymbol} (${leg.fromTokenClass}) -> ${leg.toSymbol} (${leg.toTokenClass})`,
+        );
+      });
+    }
+
+    console.log(`   Expected profit: ${opportunity.profitPercentage.toFixed(2)}%`);
+    console.log(`   Trade amount: ${opportunity.maxTradeAmount}`);
+    console.log(`   Balance: ${opportunity.currentBalance.toFixed(2)} ${entrySymbol}`);
+  }
+
+  private isDirectOpportunity(
+    opportunity: ArbitrageOpportunity,
+  ): opportunity is DirectArbitrageOpportunity {
+    return opportunity.strategy === 'direct';
+  }
+
+  private formatOpportunityPath(opportunity: ArbitrageOpportunity): string {
+    if (this.isDirectOpportunity(opportunity)) {
+      return `${opportunity.tokenA} -> ${opportunity.tokenB} -> ${opportunity.tokenA}`;
+    }
+
+    const symbols = [opportunity.entryTokenSymbol, ...opportunity.path.map(leg => leg.toSymbol)];
+    return symbols.join(' -> ');
+  }
+
+  private getEntryTokenSymbol(opportunity: ArbitrageOpportunity): string {
+    return this.isDirectOpportunity(opportunity)
+      ? opportunity.tokenA
+      : opportunity.entryTokenSymbol;
   }
 
   private logTradingStats(): void {
@@ -220,7 +285,9 @@ class GalaTradingBot {
     if (activeTrades.length > 0) {
       console.log('   Active trade statuses:');
       activeTrades.forEach(trade => {
-        console.log(`     ${trade.id}: ${trade.status} (${trade.opportunity.tokenA} -> ${trade.opportunity.tokenB})`);
+        console.log(
+          `     ${trade.id}: ${trade.status} (${this.formatOpportunityPath(trade.opportunity)})`,
+        );
       });
     }
   }

@@ -1,4 +1,9 @@
-import { ArbitrageOpportunity, SwapData } from '../strategies/arbitrage';
+import {
+  ArbitrageOpportunity,
+  DirectArbitrageOpportunity,
+  SwapData,
+} from '../strategies/arbitrage';
+import type { TriangularArbitrageOpportunity } from '../strategies/triangularArbitrage';
 import { TradingPair, TokenInfo, SwapQuote, SwapResult } from '../api/gswap';
 
 export const createMockTokenInfo = (symbol: string, tokenClass: string): TokenInfo => ({
@@ -45,8 +50,13 @@ export const createMockSwapResult = (
   ...overrides
 });
 
-export const createMockArbitrageOpportunity = (): ArbitrageOpportunity => ({
+export const createMockArbitrageOpportunity = (): DirectArbitrageOpportunity => ({
   id: 'test-opportunity',
+  strategy: 'direct',
+  entryTokenClass: 'GALA|Unit|none|none',
+  entryTokenSymbol: 'GALA',
+  exitTokenClass: 'GALA|Unit|none|none',
+  exitTokenSymbol: 'GALA',
   tokenA: 'GALA',
   tokenB: 'GUSDC',
   tokenClassA: 'GALA|Unit|none|none',
@@ -61,7 +71,56 @@ export const createMockArbitrageOpportunity = (): ArbitrageOpportunity => ({
   hasFunds: true,
   currentBalance: 10000,
   shortfall: 0,
-  timestamp: Date.now()
+  timestamp: Date.now(),
+  confidence: 5.13,
+});
+
+export const createMockTriangularOpportunity = (): TriangularArbitrageOpportunity => ({
+  id: 'tri-test-opportunity',
+  strategy: 'triangular',
+  entryTokenClass: 'GALA|Unit|none|none',
+  entryTokenSymbol: 'GALA',
+  exitTokenClass: 'GALA|Unit|none|none',
+  exitTokenSymbol: 'GALA',
+  profitPercentage: 5,
+  estimatedProfit: 50,
+  maxTradeAmount: 1000,
+  hasFunds: true,
+  currentBalance: 5000,
+  shortfall: 0,
+  timestamp: Date.now(),
+  confidence: 5,
+  path: [
+    {
+      fromSymbol: 'GALA',
+      fromTokenClass: 'GALA|Unit|none|none',
+      toSymbol: 'GUSDC',
+      toTokenClass: 'GUSDC|Unit|none|none',
+      quote: createMockSwapQuote(1000, 1100, 'GALA|Unit|none|none', 'GUSDC|Unit|none|none'),
+      inputAmount: 1000,
+      outputAmount: 1100,
+    },
+    {
+      fromSymbol: 'GUSDC',
+      fromTokenClass: 'GUSDC|Unit|none|none',
+      toSymbol: 'GWETH',
+      toTokenClass: 'GWETH|Unit|none|none',
+      quote: createMockSwapQuote(1100, 900, 'GUSDC|Unit|none|none', 'GWETH|Unit|none|none'),
+      inputAmount: 1100,
+      outputAmount: 900,
+    },
+    {
+      fromSymbol: 'GWETH',
+      fromTokenClass: 'GWETH|Unit|none|none',
+      toSymbol: 'GALA',
+      toTokenClass: 'GALA|Unit|none|none',
+      quote: createMockSwapQuote(900, 1050, 'GWETH|Unit|none|none', 'GALA|Unit|none|none'),
+      inputAmount: 900,
+      outputAmount: 1050,
+    },
+  ],
+  referenceInputAmount: 1000,
+  referenceOutputAmount: 1050,
 });
 
 export const createMockSwapData = (): SwapData => ({

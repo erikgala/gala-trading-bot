@@ -35,6 +35,36 @@ const createQuote = (
   route: [inputToken, outputToken],
 });
 
+const TRADE_AMOUNT = 1000;
+const PROFITABLE_BUY_OUTPUT = 27_000;
+const PROFITABLE_SELL_OUTPUT = 1_100;
+
+const mockDirectQuotes = (
+  api: jest.Mocked<GSwapAPI>,
+  buyOutput = PROFITABLE_BUY_OUTPUT,
+  sellOutput = PROFITABLE_SELL_OUTPUT,
+) => {
+  api.getQuote.mockImplementation(async (input, output, amount) => {
+    if (
+      input === DIRECT_PAIR.tokenClassA &&
+      output === DIRECT_PAIR.tokenClassB &&
+      Math.abs(amount - TRADE_AMOUNT) < 1e-6
+    ) {
+      return createQuote(DIRECT_PAIR.tokenClassA, DIRECT_PAIR.tokenClassB, TRADE_AMOUNT, buyOutput);
+    }
+
+    if (
+      input === DIRECT_PAIR.tokenClassB &&
+      output === DIRECT_PAIR.tokenClassA &&
+      Math.abs(amount - buyOutput) < 1e-6
+    ) {
+      return createQuote(DIRECT_PAIR.tokenClassB, DIRECT_PAIR.tokenClassA, buyOutput, sellOutput);
+    }
+
+    return null;
+  });
+};
+
 const DIRECT_PAIR: TradingPair = createMockTradingPair('GALA', 'GUSDC');
 
 describe('ArbitrageDetector', () => {
@@ -66,29 +96,22 @@ describe('ArbitrageDetector', () => {
 
   it('detects direct opportunities for swap data', async () => {
     const swapData = createMockSwapData();
-    const quoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 27);
-    const quoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 27, 1.1);
-
-    mockApi.getQuote
-      .mockResolvedValueOnce(quoteAB)
-      .mockResolvedValueOnce(quoteBA);
+    mockDirectQuotes(mockApi);
 
     const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
 
     expect(opportunities).toHaveLength(1);
-    expect(opportunities[0].tokenA).toBe('GALA');
-    expect(opportunities[0].tokenB).toBe('GUSDC');
-    expect(opportunities[0].profitPercentage).toBeGreaterThan(0);
+    expect(opportunities[0].strategy).toBe('direct');
+    if (opportunities[0].strategy === 'direct') {
+      expect(opportunities[0].tokenA).toBe('GALA');
+      expect(opportunities[0].tokenB).toBe('GUSDC');
+      expect(opportunities[0].profitPercentage).toBeGreaterThan(0);
+    }
   });
 
   it('returns empty array when no profitable spread exists', async () => {
     const swapData = createMockSwapData();
-    const neutralQuoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 25);
-    const neutralQuoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 25, 1);
-
-    mockApi.getQuote
-      .mockResolvedValueOnce(neutralQuoteAB)
-      .mockResolvedValueOnce(neutralQuoteBA);
+    mockDirectQuotes(mockApi, 25_000, TRADE_AMOUNT);
 
     const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
 
@@ -113,33 +136,29 @@ describe('ArbitrageDetector', () => {
       },
     };
 
-    const quoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 27);
-    const quoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 27, 1.1);
-
-    mockApi.getQuote
-      .mockResolvedValueOnce(quoteAB)
-      .mockResolvedValueOnce(quoteBA);
+    mockDirectQuotes(mockApi);
 
     const opportunity = await detector.evaluateSwapOperation(operation, mockApi);
 
     expect(opportunity).not.toBeNull();
-    expect(opportunity?.tokenA).toBe('GALA');
-    expect(opportunity?.tokenB).toBe('GUSDC');
+    expect(opportunity?.strategy).toBe('direct');
+    if (opportunity?.strategy === 'direct') {
+      expect(opportunity.tokenA).toBe('GALA');
+      expect(opportunity.tokenB).toBe('GUSDC');
+    }
   });
 
   it('detects direct opportunities across trading pairs', async () => {
-    const quoteAB = createQuote('GALA|Unit|none|none', 'GUSDC|Unit|none|none', 1, 27);
-    const quoteBA = createQuote('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 27, 1.1);
-
-    mockApi.getQuote
-      .mockResolvedValueOnce(quoteAB)
-      .mockResolvedValueOnce(quoteBA);
+    mockDirectQuotes(mockApi);
 
     const opportunities = await detector.detectAllOpportunities([DIRECT_PAIR], mockApi, new Map());
 
     expect(opportunities).toHaveLength(1);
-    expect(opportunities[0].tokenClassA).toBe('GALA|Unit|none|none');
-    expect(opportunities[0].tokenClassB).toBe('GUSDC|Unit|none|none');
+    expect(opportunities[0].strategy).toBe('direct');
+    if (opportunities[0].strategy === 'direct') {
+      expect(opportunities[0].tokenClassA).toBe('GALA|Unit|none|none');
+      expect(opportunities[0].tokenClassB).toBe('GUSDC|Unit|none|none');
+    }
   });
 
   it('ignores pairs that do not involve GALA', async () => {
@@ -154,8 +173,11 @@ describe('ArbitrageOpportunity utility', () => {
     const opportunity = createMockArbitrageOpportunity();
 
     expect(opportunity.id).toBe('test-opportunity');
-    expect(opportunity.tokenA).toBe('GALA');
-    expect(opportunity.tokenB).toBe('GUSDC');
+    expect(opportunity.strategy).toBe('direct');
+    if (opportunity.strategy === 'direct') {
+      expect(opportunity.tokenA).toBe('GALA');
+      expect(opportunity.tokenB).toBe('GUSDC');
+    }
     expect(opportunity.profitPercentage).toBeGreaterThan(0);
     expect(opportunity.hasFunds).toBe(true);
   });
