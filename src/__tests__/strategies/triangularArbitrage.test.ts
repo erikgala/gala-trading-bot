@@ -1,5 +1,5 @@
 import { TriangularArbitrageDetector } from '../../strategies/triangularArbitrage';
-import { GSwapAPI, TradingPair } from '../../api/gswap';
+import { GSwapAPI, TradingPair, buildQuoteCacheKey, QuoteMap } from '../../api/gswap';
 import type { BalanceSnapshot } from '../../api/gswap';
 import { createMockTradingPair, createMockSwapQuote } from '../testUtils';
 
@@ -44,29 +44,27 @@ describe('TriangularArbitrageDetector', () => {
     const pairs: TradingPair[] = [
       createMockTradingPair('GALA', 'GUSDC'),
       createMockTradingPair('GALA', 'GWETH'),
+      createMockTradingPair('GUSDC', 'GWETH'),
     ];
 
-    mockApi.getQuote.mockImplementation(async (input, output, amount) => {
-      if (input === GALA_CLASS && output === GUSDC_CLASS && amount === 1) {
-        return createMockSwapQuote(1, 1.1, GALA_CLASS, GUSDC_CLASS);
-      }
+    const quoteMap: QuoteMap = new Map();
+    const now = Date.now();
+    const setQuote = (input: string, output: string, amount: number, resultAmount: number) => {
+      const quote = createMockSwapQuote(amount, resultAmount, input, output);
+      quoteMap.set(buildQuoteCacheKey(input, output, amount), { quote, timestamp: now });
+    };
 
-      if (
-        input === GUSDC_CLASS &&
-        output === GWETH_CLASS &&
-        Math.abs(amount - 1.1) < 1e-6
-      ) {
-        return createMockSwapQuote(1.1, 0.9, GUSDC_CLASS, GWETH_CLASS);
-      }
+    setQuote(GALA_CLASS, GUSDC_CLASS, 1, 1.1);
+    setQuote(GUSDC_CLASS, GWETH_CLASS, 1.1, 0.9);
+    setQuote(GWETH_CLASS, GALA_CLASS, 0.9, 1.05);
 
-      if (input === GWETH_CLASS && output === GALA_CLASS && Math.abs(amount - 0.9) < 1e-6) {
-        return createMockSwapQuote(0.9, 1.05, GWETH_CLASS, GALA_CLASS);
-      }
+    setQuote(GALA_CLASS, GUSDC_CLASS, 1000, 1100);
+    setQuote(GUSDC_CLASS, GWETH_CLASS, 1100, 900);
+    setQuote(GWETH_CLASS, GALA_CLASS, 900, 1050);
 
-      return null;
-    });
+    mockApi.getQuote.mockImplementation(async () => null);
 
-    const opportunities = await detector.detectAllOpportunities(pairs, mockApi, new Map());
+    const opportunities = await detector.detectAllOpportunities(pairs, mockApi, quoteMap);
 
     expect(opportunities.length).toBeGreaterThanOrEqual(1);
     const opportunity = opportunities[0];

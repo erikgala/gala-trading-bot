@@ -157,6 +157,7 @@ export class TriangularArbitrageDetector {
         const opportunity = await this.evaluateOpportunity({
           api,
           balanceSnapshot,
+          provider,
           galaToken,
           firstToken,
           secondToken,
@@ -177,6 +178,7 @@ export class TriangularArbitrageDetector {
   private async evaluateOpportunity(params: {
     api: GSwapAPI;
     balanceSnapshot: BalanceSnapshot;
+    provider: CachedQuoteProvider;
     galaToken: TokenInfo;
     firstToken: TokenInfo;
     secondToken: TokenInfo;
@@ -187,6 +189,7 @@ export class TriangularArbitrageDetector {
     const {
       api,
       balanceSnapshot,
+      provider,
       galaToken,
       firstToken,
       secondToken,
@@ -222,8 +225,48 @@ export class TriangularArbitrageDetector {
       return null;
     }
 
-    const unitProfit = profitAmount / startingAmount;
-    const estimatedProfit = unitProfit * amountToTrade;
+    const tradeFirstQuote = await provider.getQuote(
+      galaToken.tokenClass,
+      firstToken.tokenClass,
+      amountToTrade,
+    );
+
+    if (!isValidQuote(tradeFirstQuote)) {
+      return null;
+    }
+
+    const tradeSecondQuote = await provider.getQuote(
+      firstToken.tokenClass,
+      secondToken.tokenClass,
+      tradeFirstQuote.outputAmount,
+    );
+
+    if (!isValidQuote(tradeSecondQuote)) {
+      return null;
+    }
+
+    const tradeThirdQuote = await provider.getQuote(
+      secondToken.tokenClass,
+      galaToken.tokenClass,
+      tradeSecondQuote.outputAmount,
+    );
+
+    if (!isValidQuote(tradeThirdQuote)) {
+      return null;
+    }
+
+    const finalTradeAmount = tradeThirdQuote.outputAmount;
+    const tradeProfitAmount = finalTradeAmount - amountToTrade;
+
+    if (!Number.isFinite(tradeProfitAmount) || tradeProfitAmount <= 0) {
+      return null;
+    }
+
+    const tradeProfitPercentage = (tradeProfitAmount / amountToTrade) * 100;
+
+    if (!Number.isFinite(tradeProfitPercentage) || tradeProfitPercentage < config.minProfitThreshold) {
+      return null;
+    }
 
     return {
       id: `tri-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -232,45 +275,45 @@ export class TriangularArbitrageDetector {
       entryTokenSymbol: galaToken.symbol,
       exitTokenClass: galaToken.tokenClass,
       exitTokenSymbol: galaToken.symbol,
-      profitPercentage,
-      estimatedProfit,
+      profitPercentage: tradeProfitPercentage,
+      estimatedProfit: tradeProfitAmount,
       maxTradeAmount: amountToTrade,
       hasFunds: fundsCheck.hasFunds,
       currentBalance: fundsCheck.currentBalance,
       shortfall: fundsCheck.shortfall,
       timestamp: Date.now(),
-      confidence: profitPercentage,
+      confidence: tradeProfitPercentage,
       path: [
         {
           fromSymbol: galaToken.symbol,
           fromTokenClass: galaToken.tokenClass,
           toSymbol: firstToken.symbol,
           toTokenClass: firstToken.tokenClass,
-          quote: firstQuote,
-          inputAmount: firstQuote.inputAmount,
-          outputAmount: firstQuote.outputAmount,
+          quote: tradeFirstQuote,
+          inputAmount: tradeFirstQuote.inputAmount,
+          outputAmount: tradeFirstQuote.outputAmount,
         },
         {
           fromSymbol: firstToken.symbol,
           fromTokenClass: firstToken.tokenClass,
           toSymbol: secondToken.symbol,
           toTokenClass: secondToken.tokenClass,
-          quote: secondQuote,
-          inputAmount: secondQuote.inputAmount,
-          outputAmount: secondQuote.outputAmount,
+          quote: tradeSecondQuote,
+          inputAmount: tradeSecondQuote.inputAmount,
+          outputAmount: tradeSecondQuote.outputAmount,
         },
         {
           fromSymbol: secondToken.symbol,
           fromTokenClass: secondToken.tokenClass,
           toSymbol: galaToken.symbol,
           toTokenClass: galaToken.tokenClass,
-          quote: thirdQuote,
-          inputAmount: thirdQuote.inputAmount,
-          outputAmount: thirdQuote.outputAmount,
+          quote: tradeThirdQuote,
+          inputAmount: tradeThirdQuote.inputAmount,
+          outputAmount: tradeThirdQuote.outputAmount,
         },
       ],
-      referenceInputAmount: startingAmount,
-      referenceOutputAmount: finalAmount,
+      referenceInputAmount: amountToTrade,
+      referenceOutputAmount: finalTradeAmount,
     };
   }
 }

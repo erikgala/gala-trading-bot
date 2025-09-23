@@ -1,11 +1,10 @@
 import { TradeExecutor, TradeExecution } from '../../trader/executor';
-import { GSwapAPI, SwapQuote } from '../../api/gswap';
+import { GSwapAPI } from '../../api/gswap';
 import { DirectArbitrageOpportunity } from '../../strategies/arbitrage';
 import {
   createMockArbitrageOpportunity,
   createMockTriangularOpportunity,
   createMockSwapResult,
-  createMockSwapQuote,
 } from '../testUtils';
 
 jest.mock('../../api/gswap');
@@ -26,18 +25,6 @@ describe('TradeExecutor', () => {
 
   const createOpportunity = (): DirectArbitrageOpportunity => createMockArbitrageOpportunity();
 
-  const primeQuotes = (
-    opportunity: DirectArbitrageOpportunity,
-    overrides: { buyQuote?: SwapQuote; sellQuote?: SwapQuote } = {}
-  ): { buyQuote: SwapQuote; sellQuote: SwapQuote } => {
-    const buyQuote = overrides.buyQuote ?? opportunity.quoteAToB;
-    const sellQuote = overrides.sellQuote ?? opportunity.quoteBToA;
-
-    mockApi.getQuote.mockResolvedValueOnce(buyQuote).mockResolvedValueOnce(sellQuote);
-
-    return { buyQuote, sellQuote };
-  };
-
   describe('constructor', () => {
     it('initializes with no active trades', () => {
       expect(executor.getActiveTrades()).toHaveLength(0);
@@ -47,7 +34,7 @@ describe('TradeExecutor', () => {
   describe('executeArbitrage', () => {
     it('completes trade when both swaps succeed', async () => {
       const opportunity = createOpportunity();
-      const { buyQuote, sellQuote } = primeQuotes(opportunity);
+      const { quoteAToB: buyQuote, quoteBToA: sellQuote } = opportunity;
       const buySwapResult = createMockSwapResult('0x123', {
         inputAmount: opportunity.maxTradeAmount,
         outputAmount: buyQuote.outputAmount,
@@ -87,9 +74,40 @@ describe('TradeExecutor', () => {
       );
     });
 
+    it('releases capacity and records history after a completed trade', async () => {
+      const opportunity = createOpportunity();
+      const { quoteAToB: buyQuote, quoteBToA: sellQuote } = opportunity;
+      const buySwapResult = createMockSwapResult('0xhist1', {
+        inputAmount: opportunity.maxTradeAmount,
+        outputAmount: buyQuote.outputAmount,
+      });
+      const sellSwapResult = createMockSwapResult('0xhist2', {
+        inputAmount: buySwapResult.outputAmount,
+        outputAmount: sellQuote.outputAmount,
+      });
+
+      mockApi.executeSwap
+        .mockResolvedValueOnce(buySwapResult)
+        .mockResolvedValueOnce(sellSwapResult);
+
+      const execution = await executor.executeArbitrage(opportunity);
+
+      expect(executor.getActiveTrades()).toHaveLength(0);
+      expect(executor.canExecuteTrade()).toBe(true);
+
+      const history = executor.getTradeHistory();
+      expect(history).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: execution.id, status: 'completed' }),
+        ]),
+      );
+
+      const retrieved = executor.getTradeExecution(execution.id);
+      expect(retrieved).toMatchObject({ id: execution.id, status: 'completed' });
+    });
+
     it('fails trade when swap execution throws', async () => {
       const opportunity = createOpportunity();
-      primeQuotes(opportunity);
       mockApi.executeSwap.mockRejectedValue(new Error('Swap execution failed'));
 
       const execution = await executor.executeArbitrage(opportunity);
@@ -103,8 +121,10 @@ describe('TradeExecutor', () => {
 
     it('fails trade when sell swap fails', async () => {
       const opportunity = createOpportunity();
-      primeQuotes(opportunity);
-      const buySwapResult = createMockSwapResult('0xabc');
+      const buySwapResult = createMockSwapResult('0xabc', {
+        inputAmount: opportunity.maxTradeAmount,
+        outputAmount: opportunity.quoteAToB.outputAmount,
+      });
 
       mockApi.executeSwap
         .mockResolvedValueOnce(buySwapResult)
@@ -118,46 +138,32 @@ describe('TradeExecutor', () => {
       expect(execution.sellSwap).toBeUndefined();
     });
 
-    it('skips trade when refreshed quotes would lead to a loss', async () => {
-      const opportunity = createOpportunity();
-      const losingBuyQuote = createMockSwapQuote(
-        opportunity.maxTradeAmount,
-        opportunity.maxTradeAmount * 20,
-        opportunity.tokenClassA,
-        opportunity.tokenClassB
-      );
-      const losingSellQuote = createMockSwapQuote(
-        losingBuyQuote.outputAmount,
-        opportunity.maxTradeAmount * 0.9,
-        opportunity.tokenClassB,
-        opportunity.tokenClassA
-      );
-
-      primeQuotes(opportunity, { buyQuote: losingBuyQuote, sellQuote: losingSellQuote });
+    it('skips trade when opportunity profit is below the threshold', async () => {
+      const opportunity: DirectArbitrageOpportunity = {
+        ...createOpportunity(),
+        estimatedProfit: -10,
+        profitPercentage: -1,
+      };
 
       const execution = await executor.executeArbitrage(opportunity);
 
       expect(execution.status).toBe('cancelled');
-      expect(execution.error).toBe('Opportunity no longer profitable after re-quoting');
+      expect(execution.error).toBe('Opportunity no longer meets profit requirements');
       expect(execution.buySwap).toBeUndefined();
       expect(execution.sellSwap).toBeUndefined();
       expect(execution.endTime).toBeDefined();
       expect(mockApi.executeSwap).not.toHaveBeenCalled();
-      expect(mockApi.getQuote).toHaveBeenCalledTimes(2);
-      expect(execution.opportunity.strategy).toBe('direct');
-      if (execution.opportunity.strategy === 'direct') {
-        expect(execution.opportunity.quoteAToB).toEqual(losingBuyQuote);
-        expect(execution.opportunity.quoteBToA).toEqual(losingSellQuote);
-      }
     });
 
     it('cancels execution when trade is cancelled mid-flight', async () => {
       const opportunity = createOpportunity();
-      primeQuotes(opportunity);
-      const buySwapResult = createMockSwapResult('0x999');
+      const buySwapResult = createMockSwapResult('0x999', {
+        inputAmount: opportunity.maxTradeAmount,
+        outputAmount: opportunity.quoteAToB.outputAmount,
+      });
 
-      mockApi.executeSwap.mockImplementation(() =>
-        new Promise(resolve => setTimeout(() => resolve(buySwapResult), 25))
+      mockApi.executeSwap.mockImplementation(
+        () => new Promise(resolve => setTimeout(() => resolve(buySwapResult), 25))
       );
 
       const executionPromise = executor.executeArbitrage(opportunity);
@@ -181,7 +187,19 @@ describe('TradeExecutor', () => {
   describe('getActiveTrades', () => {
     it('returns active executions', async () => {
       const opportunity = createOpportunity();
-      primeQuotes(opportunity);
+      const buySwapResult = createMockSwapResult('0xactive1', {
+        inputAmount: opportunity.maxTradeAmount,
+        outputAmount: opportunity.quoteAToB.outputAmount,
+      });
+      const sellSwapResult = createMockSwapResult('0xactive2', {
+        inputAmount: buySwapResult.outputAmount,
+        outputAmount: opportunity.quoteBToA.outputAmount,
+      });
+
+      mockApi.executeSwap
+        .mockResolvedValueOnce(buySwapResult)
+        .mockResolvedValueOnce(sellSwapResult);
+
       executor.executeArbitrage(opportunity);
 
       const activeTrades = executor.getActiveTrades();
@@ -195,14 +213,6 @@ describe('TradeExecutor', () => {
   describe('triangular arbitrage execution', () => {
     it('executes all legs successfully', async () => {
       const opportunity = createMockTriangularOpportunity();
-      const triangularQuotes: SwapQuote[] = [
-        createMockSwapQuote(opportunity.maxTradeAmount, 1100, 'GALA|Unit|none|none', 'GUSDC|Unit|none|none'),
-        createMockSwapQuote(1100, 900, 'GUSDC|Unit|none|none', 'GWETH|Unit|none|none'),
-        createMockSwapQuote(900, 1050, 'GWETH|Unit|none|none', 'GALA|Unit|none|none'),
-      ];
-
-      triangularQuotes.forEach(quote => mockApi.getQuote.mockResolvedValueOnce(quote));
-
       const swapResults = [
         createMockSwapResult('0xleg1', { inputAmount: opportunity.maxTradeAmount, outputAmount: 1100 }),
         createMockSwapResult('0xleg2', { inputAmount: 1100, outputAmount: 900 }),
@@ -245,14 +255,13 @@ describe('TradeExecutor', () => {
 
     it('updates stats after successful trade', async () => {
       const opportunity = createOpportunity();
-      primeQuotes(opportunity);
       const buySwapResult = createMockSwapResult('0x123', {
         inputAmount: opportunity.maxTradeAmount,
-        outputAmount: opportunity.maxTradeAmount * 25,
+        outputAmount: opportunity.quoteAToB.outputAmount,
       });
       const sellSwapResult = createMockSwapResult('0x456', {
         inputAmount: buySwapResult.outputAmount,
-        outputAmount: buySwapResult.outputAmount + 500,
+        outputAmount: opportunity.quoteBToA.outputAmount,
       });
 
       mockApi.executeSwap

@@ -7,6 +7,7 @@ import {
   DexV3Operation,
 } from './types';
 import { ArbitrageDetector, ArbitrageOpportunity } from '../strategies/arbitrage';
+import { TriangularArbitrageDetector } from '../strategies/triangularArbitrage';
 import { GSwapAPI } from '../api/gswap';
 import { TradeExecutor } from '../trader/executor';
 import { MockTradeExecutor } from '../mock/mockTradeExecutor';
@@ -19,13 +20,17 @@ export class RealTimeEventProcessor implements EventProcessor {
   private opportunitiesFound = 0;
   private tradesExecuted = 0;
   private readonly enabledStrategies = getEnabledStrategyModes();
+  private readonly triangularDetector: TriangularArbitrageDetector;
 
   constructor(
     private api: GSwapAPI,
     private arbitrageDetector: ArbitrageDetector = new ArbitrageDetector(),
     private tradeExecutor: TradeExecutor = new TradeExecutor(api),
-    private mockTradeExecutor: MockTradeExecutor = new MockTradeExecutor()
-  ) {}
+    private mockTradeExecutor: MockTradeExecutor = new MockTradeExecutor(),
+    triangularDetector?: TriangularArbitrageDetector,
+  ) {
+    this.triangularDetector = triangularDetector ?? new TriangularArbitrageDetector();
+  }
 
   async processBlock(blockData: BlockData): Promise<void> {
     try {
@@ -41,6 +46,8 @@ export class RealTimeEventProcessor implements EventProcessor {
       }
 
       this.processedBlocks.add(blockNumber);
+
+      await this.maybeProcessTriangularArbitrage();
 
       for (const transaction of blockData.transactions) {
         await this.processTransaction(transaction);
@@ -125,6 +132,54 @@ export class RealTimeEventProcessor implements EventProcessor {
     } catch (error) {
       console.error('❌ Error executing arbitrage trade:', error);
       return false;
+    }
+  }
+
+  private async maybeProcessTriangularArbitrage(): Promise<void> {
+    if (!this.enabledStrategies.includes('triangular')) {
+      return;
+    }
+
+    try {
+      if (!this.tradeExecutor.canExecuteTrade()) {
+        return;
+      }
+
+      const pairs = await this.api.getTradingPairs();
+      if (pairs.length === 0) {
+        return;
+      }
+
+      const quoteMap = this.api.getLatestQuoteMap();
+      const opportunities = await this.triangularDetector.detectAllOpportunities(
+        pairs,
+        this.api,
+        quoteMap,
+      );
+
+      if (opportunities.length === 0) {
+        return;
+      }
+
+      for (const opportunity of opportunities) {
+        this.opportunitiesFound++;
+
+        if (!opportunity.hasFunds) {
+          continue;
+        }
+
+        if (!this.tradeExecutor.canExecuteTrade()) {
+          break;
+        }
+
+        const executed = await this.executeOpportunity(opportunity);
+
+        if (executed) {
+          this.tradesExecuted++;
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error detecting triangular arbitrage opportunities:', error);
     }
   }
 

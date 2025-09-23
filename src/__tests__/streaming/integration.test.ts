@@ -37,7 +37,7 @@ describe('Kafka Consumer Integration Tests', () => {
   let kafkaConfig: KafkaConfig;
   let evaluateSwapOperation: jest.Mock;
   let mockDetector: { evaluateSwapOperation: jest.Mock };
-  let mockTradeExecutor: { executeArbitrage: jest.Mock };
+  let mockTradeExecutor: { executeArbitrage: jest.Mock; canExecuteTrade: jest.Mock };
   let mockMockTradeExecutor: {
     executeArbitrageTrade: jest.Mock;
     getStats: jest.Mock;
@@ -97,7 +97,8 @@ describe('Kafka Consumer Integration Tests', () => {
     evaluateSwapOperation = jest.fn().mockResolvedValue(createMockArbitrageOpportunity());
     mockDetector = { evaluateSwapOperation };
     mockTradeExecutor = {
-      executeArbitrage: jest.fn().mockResolvedValue({ status: 'completed' })
+      executeArbitrage: jest.fn().mockResolvedValue({ status: 'completed' }),
+      canExecuteTrade: jest.fn().mockReturnValue(true),
     };
     mockMockTradeExecutor = {
       executeArbitrageTrade: jest.fn().mockResolvedValue(true),
