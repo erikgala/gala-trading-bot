@@ -24,6 +24,7 @@
     "avsc": "^5.7.9",
     "axios": "^1.12.2",
     "dotenv": "^17.2.2",
+    "mongodb": "^6.10.0",
     "kafkajs": "^2.2.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"

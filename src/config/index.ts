@@ -30,6 +30,11 @@ export interface BotConfig {
   
   // Logging
   logLevel: 'debug' | 'info' | 'warn' | 'error';
+
+  // MongoDB Logging
+  mongoUri: string;
+  mongoDbName: string;
+  mongoTradesCollection: string;
 }
 
 export type StrategySelection = 'direct' | 'triangular' | 'both';
@@ -56,6 +61,10 @@ export const config: BotConfig = {
   mockWalletBalances: JSON.parse(process.env.MOCK_WALLET_BALANCES || '{"GALA|Unit|none|none": 10000, "GUSDC|Unit|none|none": 5000, "GUSDT|Unit|none|none": 5000, "GWETH|Unit|none|none": 10, "GWBTC|Unit|none|none": 1}'),
   
   logLevel: (process.env.LOG_LEVEL as BotConfig['logLevel']) || 'info',
+
+  mongoUri: process.env.MONGO_URI || '',
+  mongoDbName: process.env.MONGO_DB_NAME || '',
+  mongoTradesCollection: process.env.MONGO_TRADES_COLLECTION || 'tradeExecutions',
 };
 
 // Validate required configuration
@@ -91,6 +100,10 @@ export function validateConfig(): void {
   const validStrategies: StrategySelection[] = ['direct', 'triangular', 'both'];
   if (!validStrategies.includes(config.arbitrageStrategy)) {
     throw new Error('ARBITRAGE_STRATEGY must be one of direct, triangular, or both');
+  }
+
+  if (!config.mongoUri || !config.mongoDbName) {
+    console.warn('ℹ️  MongoDB logging disabled. Set MONGO_URI and MONGO_DB_NAME to enable trade tracking.');
   }
 }
 

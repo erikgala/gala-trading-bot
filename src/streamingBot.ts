@@ -3,6 +3,7 @@ import { ArbitrageDetector } from './strategies/arbitrage';
 import { TradeExecutor } from './trader/executor';
 import { KafkaBlockConsumer, RealTimeEventProcessor, createKafkaConfig } from './streaming';
 import { config, validateConfig } from './config';
+import { ensureMongoConnection } from './db/mongoClient';
 
 class GalaStreamingBot {
   private api: GSwapAPI;
@@ -27,6 +28,9 @@ class GalaStreamingBot {
     try {
       // Validate configuration
       validateConfig();
+
+      // Verify MongoDB connectivity when configured
+      await ensureMongoConnection();
 
       // Load available tokens at startup
       await this.api.loadAvailableTokens();

@@ -3,6 +3,7 @@ import { ArbitrageDetector, ArbitrageOpportunity, DirectArbitrageOpportunity } f
 import { TriangularArbitrageDetector } from './strategies/triangularArbitrage';
 import { TradeExecutor } from './trader/executor';
 import { config, validateConfig, getEnabledStrategyModes } from './config';
+import { ensureMongoConnection } from './db/mongoClient';
 
 class GalaTradingBot {
   private api: GSwapAPI;
@@ -27,6 +28,9 @@ class GalaTradingBot {
       // Validate configuration
       validateConfig();
       console.log('✅ Configuration validated');
+
+      // Verify MongoDB connectivity when configured
+      await ensureMongoConnection();
 
       // Test API connection
       await this.testApiConnection();

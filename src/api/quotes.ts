@@ -5,7 +5,8 @@ export function buildQuoteCacheKey(
   outputTokenClass: string,
   inputAmount: number
 ): string {
-  return `${inputTokenClass}::${outputTokenClass}::${inputAmount}`;
+  const key = `${inputTokenClass}::${outputTokenClass}::${inputAmount}`;
+  return key;
 }
 
 export function cloneQuoteMap(quoteMap: QuoteMap): QuoteMap {
