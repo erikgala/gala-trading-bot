@@ -5,18 +5,21 @@ import { TradeExecutor } from './trader/executor';
 import { config, validateConfig, getEnabledStrategyModes } from './config';
 import { ensureMongoConnection } from './db/mongoClient';
 import { GalaStreamingBot } from './streaming';
+import { RateLimiter } from './streaming/rateLimiter';
 
 class GalaTradingBot {
   private api: GSwapAPI;
   private detector: ArbitrageDetector;
   private triangularDetector: TriangularArbitrageDetector;
   private executor: TradeExecutor;
+  private rateLimiter: RateLimiter;
   private isRunning: boolean = false;
   private pollingInterval?: NodeJS.Timeout;
   private readonly enabledStrategies = getEnabledStrategyModes();
 
   constructor() {
-    this.api = new GSwapAPI();
+    this.rateLimiter = new RateLimiter();
+    this.api = new GSwapAPI(this.rateLimiter);
     this.detector = new ArbitrageDetector();
     this.triangularDetector = new TriangularArbitrageDetector();
     this.executor = new TradeExecutor(this.api);
@@ -113,6 +116,12 @@ class GalaTradingBot {
     console.log(`\n🔄 Starting trading cycle at ${new Date().toISOString()}`);
 
     try {
+      // Check if we're rate limited
+      if (this.rateLimiter.isCurrentlyRateLimited()) {
+        console.log(`⏸️  Skipping trading cycle - rate limited for ${this.rateLimiter.getTimeRemainingFormatted()}`);
+        return;
+      }
+
       // Step 1: Fetch market data
       const { pairs, quoteMap } = await this.fetchMarketData();
       console.log(`📊 Fetched ${pairs.length} trading pairs`);

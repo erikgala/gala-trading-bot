@@ -11,6 +11,7 @@ import type {
   TradingPair,
   UserAssetsResponse,
 } from './types';
+import { RateLimiter } from '../streaming/rateLimiter';
 
 export { BalanceSnapshot } from './balanceManager';
 export { buildQuoteCacheKey } from './quotes';
@@ -25,8 +26,9 @@ export class GSwapAPI {
   private readonly isMockMode: boolean;
   private latestQuoteMap: QuoteMap = new Map();
   private noPoolAvailableCache: Set<string> = new Set();
+  private rateLimiter?: RateLimiter;
 
-  constructor() {
+  constructor(rateLimiter?: RateLimiter) {
     this.signer = new PrivateKeySigner(config.privateKey);
     this.gSwap = new GSwap({
       signer: this.signer,
@@ -46,6 +48,8 @@ export class GSwapAPI {
       mockWalletBalances: config.mockWalletBalances,
       fetchUserAssets: () => this.fetchUserAssets(),
     });
+    
+    this.rateLimiter = rateLimiter;
   }
 
   async loadAvailableTokens(): Promise<void> {
@@ -182,6 +186,15 @@ export class GSwapAPI {
         const key = `${inputTokenClass}-${outputTokenClass}`;
         this.noPoolAvailableCache.add(key);
       }
+      
+      // Check for 403 rate limiting error
+      if (error.code === 'HTTP_ERROR' && error.details?.status === 403) {
+        console.error(`🚫 Rate limited by API for ${inputTokenClass} -> ${outputTokenClass}`);
+        if (this.rateLimiter) {
+          this.rateLimiter.triggerRateLimit();
+        }
+      }
+      
       console.error(`Failed to get quote for ${inputTokenClass} -> ${outputTokenClass}:`, error);
       return null;
     }

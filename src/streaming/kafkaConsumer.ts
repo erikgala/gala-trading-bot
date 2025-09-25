@@ -2,6 +2,7 @@ import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
 import { BlockData, KafkaConfig, EventProcessor } from './types';
 import avro from 'avsc';
 import { parsedBlockSchema } from './parsed-block.schema';
+import { RateLimiter } from './rateLimiter';
 
 export class KafkaBlockConsumer {
   private kafka: Kafka;
@@ -9,8 +10,10 @@ export class KafkaBlockConsumer {
   private eventProcessor: EventProcessor;
   private isRunning: boolean = false;
   private topic: string;
+  private rateLimiter: RateLimiter;
+  private isPaused: boolean = false;
 
-  constructor(config: KafkaConfig, eventProcessor: EventProcessor) {
+  constructor(config: KafkaConfig, eventProcessor: EventProcessor, rateLimiter?: RateLimiter) {
     // Parse the API URL to extract brokers
     const brokers = this.parseBrokersFromUrl(config.apiUrl);
     
@@ -42,6 +45,7 @@ export class KafkaBlockConsumer {
     });
     this.eventProcessor = eventProcessor;
     this.topic = config.topic;
+    this.rateLimiter = rateLimiter || new RateLimiter();
   }
 
   /**
@@ -127,6 +131,21 @@ export class KafkaBlockConsumer {
    */
   private async processMessage(payload: EachMessagePayload): Promise<void> {
     try {
+      // Check if we're rate limited
+      if (this.rateLimiter.isCurrentlyRateLimited()) {
+        if (!this.isPaused) {
+          this.isPaused = true;
+          console.log(`⏸️  Pausing message processing due to rate limit. Resuming in ${this.rateLimiter.getTimeRemainingFormatted()}`);
+        }
+        return; // Skip processing this message
+      }
+
+      // Resume processing if we were paused
+      if (this.isPaused) {
+        this.isPaused = false;
+        console.log('▶️  Resuming message processing - rate limit expired');
+      }
+
       const { topic, message } = payload;
       
       if (!message.value) {
@@ -192,12 +211,30 @@ export class KafkaBlockConsumer {
 
 
   /**
+   * Trigger rate limiting - pause message processing
+   */
+  triggerRateLimit(): void {
+    this.rateLimiter.triggerRateLimit();
+  }
+
+  /**
    * Get consumer status
    */
-  getStatus(): { isRunning: boolean; connected: boolean } {
+  getStatus(): { 
+    isRunning: boolean; 
+    connected: boolean; 
+    isPaused: boolean;
+    rateLimitStatus: {
+      isRateLimited: boolean;
+      timeRemaining: number;
+      timeRemainingFormatted: string;
+    };
+  } {
     return {
       isRunning: this.isRunning,
       connected: this.consumer ? true : false, // Simplified check
+      isPaused: this.isPaused,
+      rateLimitStatus: this.rateLimiter.getStatus(),
     };
   }
 

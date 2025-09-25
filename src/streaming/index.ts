@@ -5,6 +5,7 @@ import { config, validateConfig } from '../config';
 import { ensureMongoConnection } from '../db/mongoClient';
 import { KafkaBlockConsumer } from './kafkaConsumer';
 import { RealTimeEventProcessor } from './eventProcessor';
+import { RateLimiter } from './rateLimiter';
 import { KafkaConfig } from './types';
 
 export function createKafkaConfig(): KafkaConfig {
@@ -24,16 +25,18 @@ class GalaStreamingBot {
   private executor: TradeExecutor;
   private kafkaConsumer: KafkaBlockConsumer;
   private eventProcessor: RealTimeEventProcessor;
+  private rateLimiter: RateLimiter;
   private isRunning: boolean = false;
 
   constructor() {
-    this.api = new GSwapAPI();
+    this.rateLimiter = new RateLimiter();
+    this.api = new GSwapAPI(this.rateLimiter);
     this.detector = new ArbitrageDetector();
     this.executor = new TradeExecutor(this.api);
     this.eventProcessor = new RealTimeEventProcessor(this.api);
 
     const kafkaConfig = createKafkaConfig();
-    this.kafkaConsumer = new KafkaBlockConsumer(kafkaConfig, this.eventProcessor);
+    this.kafkaConsumer = new KafkaBlockConsumer(kafkaConfig, this.eventProcessor, this.rateLimiter);
   }
 
   async start(): Promise<void> {
@@ -78,11 +81,25 @@ class GalaStreamingBot {
       console.log(`   Success Rate: ${status.tradingStats.successRate.toFixed(1)}%`);
       console.log(`   Total Profit: ${status.tradingStats.totalProfit.toFixed(2)}`);
     }
+
+    // Log rate limiting status
+    if (status.kafkaStatus.isPaused) {
+      console.log(`\n⏸️  Rate Limited: Paused for ${status.kafkaStatus.rateLimitStatus.timeRemainingFormatted}`);
+    }
   }
 
   getStatus(): {
     isRunning: boolean;
-    kafkaStatus: { isRunning: boolean; connected: boolean };
+    kafkaStatus: { 
+      isRunning: boolean; 
+      connected: boolean; 
+      isPaused: boolean;
+      rateLimitStatus: {
+        isRateLimited: boolean;
+        timeRemaining: number;
+        timeRemainingFormatted: string;
+      };
+    };
     processingStats: {
       blocksProcessed: number;
       blocksFiltered: number;
