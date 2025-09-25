@@ -3,12 +3,15 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+export type BotMode = 'polling' | 'streaming';
+
 export interface BotConfig {
   // Wallet Configuration
   privateKey: string;
   walletAddress: string;
 
   // Trading Configuration
+  mode: BotMode;
   minProfitThreshold: number; // Minimum profit percentage to execute trades
   maxTradeAmount: number; // Maximum amount to trade per opportunity
   pollingInterval: number; // Polling interval in milliseconds
@@ -42,19 +45,12 @@ export type StrategySelection = 'direct' | 'triangular' | 'both';
 export const config: BotConfig = {
   privateKey: process.env.PRIVATE_KEY || '',
   walletAddress: process.env.WALLET_ADDRESS || '',
-  
-  minProfitThreshold: parseFloat(process.env.MIN_PROFIT_THRESHOLD || '0.5'), // 0.5%
-  maxTradeAmount: parseFloat(process.env.MAX_TRADE_AMOUNT || '1000'),
-  pollingInterval: parseInt(process.env.POLLING_INTERVAL || '5000'), // 5 seconds
-  slippageTolerance: parseFloat(process.env.SLIPPAGE_TOLERANCE || '5.0'), // 5%
-  balanceRefreshInterval: parseInt(process.env.BALANCE_REFRESH_INTERVAL || '0'), // 0 = disabled
-  arbitrageStrategy: (process.env.ARBITRAGE_STRATEGY as StrategySelection) || 'direct',
-  
-  maxConcurrentTrades: parseInt(process.env.MAX_CONCURRENT_TRADES || '3'),
-  stopLossPercentage: parseFloat(process.env.STOP_LOSS_PERCENTAGE || '5.0'), // 5%
-  
+  mode: (process.env.BOT_MODE as BotMode) || 'polling',
   galaSwapApiUrl: process.env.GALASWAP_API_URL || 'https://dex-backend-prod1.defi.gala.com',
-  
+  mongoUri: process.env.MONGO_URI || '',
+  mongoDbName: process.env.MONGO_DB_NAME || '',
+  mongoTradesCollection: process.env.MONGO_TRADES_COLLECTION || 'tradeExecutions',
+
   // Mock Trading Configuration
   mockMode: process.env.MOCK_MODE === 'true',
   mockRunName: process.env.MOCK_RUN_NAME?.replace('${timestamp}', Date.now().toString()) || `run_${Date.now()}`,
@@ -62,13 +58,24 @@ export const config: BotConfig = {
   
   logLevel: (process.env.LOG_LEVEL as BotConfig['logLevel']) || 'info',
 
-  mongoUri: process.env.MONGO_URI || '',
-  mongoDbName: process.env.MONGO_DB_NAME || '',
-  mongoTradesCollection: process.env.MONGO_TRADES_COLLECTION || 'tradeExecutions',
+  // Constants
+  minProfitThreshold: 0.5, // 0.5%
+  maxTradeAmount: 3000,
+  pollingInterval: 5000, // 5 seconds
+  slippageTolerance: 5.0, // 5%
+  balanceRefreshInterval: 0, // 0 = disabled
+  arbitrageStrategy: 'direct',
+  maxConcurrentTrades: 3,
+  stopLossPercentage: 5.0, // 5%
 };
 
 // Validate required configuration
 export function validateConfig(): void {
+  const validModes: BotMode[] = ['polling', 'streaming'];
+  if (!validModes.includes(config.mode)) {
+    throw new Error('BOT_MODE must be one of polling or streaming');
+  }
+
   if (!config.privateKey) {
     throw new Error('PRIVATE_KEY is required');
   }

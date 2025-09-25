@@ -5,6 +5,12 @@ let clientPromise: Promise<MongoClient> | null = null;
 let hasLoggedSuccessfulConnection = false;
 
 export function isMongoConfigured(): boolean {
+  const isTestEnv = process.env.NODE_ENV === 'test' && process.env.USE_REAL_MONGO_IN_TESTS !== 'true';
+
+  if (isTestEnv) {
+    return false;
+  }
+
   return Boolean(config.mongoUri && config.mongoDbName);
 }
 
