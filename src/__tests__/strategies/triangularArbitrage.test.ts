@@ -1,6 +1,7 @@
 import { TriangularArbitrageDetector } from '../../strategies/triangularArbitrage';
-import { GSwapAPI, TradingPair, buildQuoteCacheKey, QuoteMap } from '../../api/gswap';
+import { GSwapAPI, TradingPair, QuoteMap } from '../../api/gswap';
 import type { BalanceSnapshot } from '../../api/gswap';
+import { buildQuoteCacheKey } from '../../api/quotes';
 import { createMockTradingPair, createMockSwapQuote } from '../testUtils';
 
 jest.mock('../../api/gswap');
@@ -8,6 +9,11 @@ const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 const { BalanceSnapshot: RealBalanceSnapshot } = jest.requireActual<
   typeof import('../../api/gswap')
 >('../../api/gswap');
+
+// Mock buildQuoteCacheKey to use the real implementation
+jest.mock('../../api/quotes', () => ({
+  ...jest.requireActual('../../api/quotes'),
+}));
 
 const GALA_CLASS = 'GALA|Unit|none|none';
 const GUSDC_CLASS = 'GUSDC|Unit|none|none';
@@ -58,9 +64,17 @@ describe('TriangularArbitrageDetector', () => {
     setQuote(GUSDC_CLASS, GWETH_CLASS, 1.1, 0.9);
     setQuote(GWETH_CLASS, GALA_CLASS, 0.9, 1.05);
 
-    setQuote(GALA_CLASS, GUSDC_CLASS, 1000, 1100);
-    setQuote(GUSDC_CLASS, GWETH_CLASS, 1100, 900);
-    setQuote(GWETH_CLASS, GALA_CLASS, 900, 1050);
+    setQuote(GALA_CLASS, GWETH_CLASS, 1, 0.95);
+    setQuote(GWETH_CLASS, GUSDC_CLASS, 0.95, 1.05);
+    setQuote(GUSDC_CLASS, GALA_CLASS, 1.05, 1.1);
+
+    setQuote(GALA_CLASS, GUSDC_CLASS, 3000, 3300); // 10% profit
+    setQuote(GUSDC_CLASS, GWETH_CLASS, 3300, 2700); // 18.18% loss  
+    setQuote(GWETH_CLASS, GALA_CLASS, 2700, 3150); // 16.67% profit
+
+    setQuote(GALA_CLASS, GWETH_CLASS, 3000, 2850); // 5% loss
+    setQuote(GWETH_CLASS, GUSDC_CLASS, 2850, 3150); // 10.53% profit
+    setQuote(GUSDC_CLASS, GALA_CLASS, 3150, 3300); // 4.76% profit
 
     mockApi.getQuote.mockImplementation(async () => null);
 

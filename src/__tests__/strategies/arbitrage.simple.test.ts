@@ -47,18 +47,22 @@ const mockDirectQuotes = (
   api.getQuote.mockImplementation(async (input, output, amount) => {
     if (
       input === DIRECT_PAIR.tokenClassA &&
-      output === DIRECT_PAIR.tokenClassB &&
-      Math.abs(amount - TRADE_AMOUNT) < 1e-6
+      output === DIRECT_PAIR.tokenClassB
     ) {
-      return createQuote(DIRECT_PAIR.tokenClassA, DIRECT_PAIR.tokenClassB, TRADE_AMOUNT, buyOutput);
+      // Scale the output based on the input amount
+      const scaleFactor = amount / TRADE_AMOUNT;
+      const scaledOutput = buyOutput * scaleFactor;
+      return createQuote(DIRECT_PAIR.tokenClassA, DIRECT_PAIR.tokenClassB, amount, scaledOutput);
     }
 
     if (
       input === DIRECT_PAIR.tokenClassB &&
-      output === DIRECT_PAIR.tokenClassA &&
-      Math.abs(amount - buyOutput) < 1e-6
+      output === DIRECT_PAIR.tokenClassA
     ) {
-      return createQuote(DIRECT_PAIR.tokenClassB, DIRECT_PAIR.tokenClassA, buyOutput, sellOutput);
+      // Scale the output based on the input amount
+      const scaleFactor = amount / buyOutput;
+      const scaledOutput = sellOutput * scaleFactor;
+      return createQuote(DIRECT_PAIR.tokenClassB, DIRECT_PAIR.tokenClassA, amount, scaledOutput);
     }
 
     return null;

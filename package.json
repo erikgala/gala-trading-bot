@@ -4,16 +4,18 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "start": "ts-node src/index.ts",
-    "streaming": "ts-node src/streamingBot.ts",
+    "start": "node dist/index.js",
+    "streaming": "BOT_MODE=streaming ts-node src/index.ts",
     "build": "tsc",
     "dev": "ts-node --watch src/index.ts",
-    "dev:streaming": "ts-node --watch src/streamingBot.ts",
+    "dev:streaming": "BOT_MODE=streaming ts-node --watch src/index.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:ci": "jest --ci --coverage --watchAll=false",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "start:ts": "ts-node src/index.ts",
+    "start:streaming": "BOT_MODE=streaming node dist/index.js"
   },
   "keywords": [],
   "author": "",
@@ -24,6 +26,7 @@
     "avsc": "^5.7.9",
     "axios": "^1.12.2",
     "dotenv": "^17.2.2",
+    "mongodb": "^6.10.0",
     "kafkajs": "^2.2.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"

@@ -3,6 +3,8 @@ import { ArbitrageDetector, ArbitrageOpportunity, DirectArbitrageOpportunity } f
 import { TriangularArbitrageDetector } from './strategies/triangularArbitrage';
 import { TradeExecutor } from './trader/executor';
 import { config, validateConfig, getEnabledStrategyModes } from './config';
+import { ensureMongoConnection } from './db/mongoClient';
+import { GalaStreamingBot } from './streaming';
 
 class GalaTradingBot {
   private api: GSwapAPI;
@@ -27,6 +29,9 @@ class GalaTradingBot {
       // Validate configuration
       validateConfig();
       console.log('✅ Configuration validated');
+
+      // Verify MongoDB connectivity when configured
+      await ensureMongoConnection();
 
       // Test API connection
       await this.testApiConnection();
@@ -293,41 +298,84 @@ class GalaTradingBot {
   }
 }
 
-// Main execution
-async function main() {
-  const bot = new GalaTradingBot();
-  
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
+interface BotLifecycle {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+function registerLifecycleHandlers(bot: BotLifecycle, options?: { onStop?: () => void }): void {
+  let shuttingDown = false;
+
+  const shutdown = async (code: number) => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+
+    try {
+      await bot.stop();
+    } catch (error) {
+      console.error('❌ Error during shutdown:', error);
+    } finally {
+      options?.onStop?.();
+      process.exit(code);
+    }
+  };
+
+  process.on('SIGINT', () => {
     console.log('\n🛑 Received SIGINT, shutting down gracefully...');
-    await bot.stop();
-    process.exit(0);
+    void shutdown(0);
   });
 
-  process.on('SIGTERM', async () => {
+  process.on('SIGTERM', () => {
     console.log('\n🛑 Received SIGTERM, shutting down gracefully...');
-    await bot.stop();
-    process.exit(0);
+    void shutdown(0);
   });
 
-  // Handle uncaught exceptions
-  process.on('uncaughtException', async (error) => {
+  process.on('uncaughtException', error => {
     console.error('❌ Uncaught Exception:', error);
-    await bot.stop();
-    process.exit(1);
+    void shutdown(1);
   });
 
-  process.on('unhandledRejection', async (reason, promise) => {
+  process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-    await bot.stop();
-    process.exit(1);
+    void shutdown(1);
   });
+}
 
-  // Start the bot
+async function runPollingMode(): Promise<void> {
+  const bot = new GalaTradingBot();
+  registerLifecycleHandlers(bot);
   await bot.start();
 }
 
-// Run the bot
+async function runStreamingMode(): Promise<void> {
+  const bot = new GalaStreamingBot();
+  let statusInterval: NodeJS.Timeout | undefined;
+
+  registerLifecycleHandlers(bot, {
+    onStop: () => {
+      if (statusInterval) {
+        clearInterval(statusInterval);
+      }
+    },
+  });
+
+  await bot.start();
+
+  statusInterval = setInterval(() => {
+    bot.logStatus();
+  }, 30000);
+}
+
+async function main() {
+  if (config.mode === 'streaming') {
+    await runStreamingMode();
+  } else {
+    await runPollingMode();
+  }
+}
+
 if (require.main === module) {
   main().catch(error => {
     console.error('❌ Fatal error:', error);

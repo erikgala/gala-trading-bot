@@ -40,6 +40,8 @@ A sophisticated arbitrage trading bot for the GalaChain gSwap DEX built with Nod
    
    **Real-time Streaming Mode (Advanced):**
    ```bash
+   BOT_MODE=streaming npm start
+   # or (TypeScript runtime)
    npm run streaming
    ```
    
@@ -50,6 +52,36 @@ A sophisticated arbitrage trading bot for the GalaChain gSwap DEX built with Nod
    MOCK_MODE=true npm run streaming
    ```
 
+## Docker
+
+Build the production image locally:
+
+```bash
+docker build -t trading-bot .
+```
+
+Run the container locally:
+
+```bash
+docker run --rm -it \
+  -e BOT_WALLET_KEY=xxx \
+  -e KAFKA_USERNAME=xxx \
+  -e KAFKA_PASSWORD=xxx \
+  -e BOT_MODE=polling \
+  trading-bot
+```
+
+Set `BOT_MODE=streaming` in the command above to switch the container to streaming mode.
+
+## Deployment
+
+Pushes to `main` trigger GitHub Actions to build the Docker image, push it to Docker Hub, and redeploy the DigitalOcean droplet with the freshly pulled container.
+
+## Security
+
+- Never commit `.env` or other secret material to the repository.
+- Secrets are injected at runtime through environment variables provided to the container and workflow, so the image remains free of sensitive data.
+
 ## Operation Modes
 
 ### Polling Mode (`npm start`)
@@ -58,7 +90,7 @@ A sophisticated arbitrage trading bot for the GalaChain gSwap DEX built with Nod
 - **Pros**: Simple, predictable, easier to debug
 - **Cons**: Slower response to market changes
 
-### Streaming Mode (`npm run streaming`)
+### Streaming Mode (`BOT_MODE=streaming`)
 - **Best for**: Advanced users, high-frequency trading
 - **How it works**: Real-time analysis of blockchain events via Kafka
 - **Pros**: Instant response to market changes, more opportunities
@@ -82,6 +114,7 @@ Create a `.env` file based on `env.example`:
 |----------|-------------|---------|
 | `PRIVATE_KEY` | Your wallet private key | Required |
 | `WALLET_ADDRESS` | Your wallet address | Required |
+| `BOT_MODE` | Execution mode (`polling` or `streaming`) | `polling` |
 | `MIN_PROFIT_THRESHOLD` | Minimum profit % to execute trades | `0.5` |
 | `MAX_TRADE_AMOUNT` | Maximum amount per trade | `1000` |
 | `POLLING_INTERVAL` | Market data polling interval (ms) | `5000` |
@@ -124,9 +157,9 @@ src/
 ├── streaming/        # Real-time streaming mode
 │   ├── kafkaConsumer.ts   # Kafka message consumer
 │   ├── eventProcessor.ts  # Block event processing
+│   ├── index.ts          # Streaming bot and helpers
 │   └── types.ts          # Streaming data types
-├── index.ts          # Polling mode entry point
-└── streamingBot.ts   # Streaming mode entry point
+└── index.ts          # Main entry point (polling or streaming via BOT_MODE)
 ```
 
 ## Trading Strategies
@@ -204,11 +237,13 @@ npm run build
 node dist/index.js
 
 # Run built version (streaming)
-node dist/streamingBot.js
+BOT_MODE=streaming node dist/index.js
 
 # Test mock mode
 MOCK_MODE=true npm run dev
 ```
+
+Automated tests skip connecting to a real MongoDB instance by default. Set `USE_REAL_MONGO_IN_TESTS=true` if you explicitly need to exercise the live database during test runs.
 
 ## Safety Notes
 

@@ -1,26 +1,20 @@
-import { GSwapAPI, SwapQuote, SwapResult } from '../api/gswap';
+import { GSwapAPI, SwapQuote } from '../api/gswap';
+import type { SwapResult } from '../api/gswap';
 import { ArbitrageOpportunity, DirectArbitrageOpportunity } from '../strategies/arbitrage';
 import type { TriangularArbitrageOpportunity } from '../strategies/triangularArbitrage';
 import { config } from '../config';
-
-export interface TradeExecution {
-  id: string;
-  opportunity: ArbitrageOpportunity;
-  buySwap?: SwapResult;
-  sellSwap?: SwapResult;
-  intermediateSwaps?: SwapResult[];
-  status: 'pending' | 'buying' | 'selling' | 'converting' | 'completed' | 'failed' | 'cancelled';
-  startTime: number;
-  endTime?: number;
-  actualProfit?: number;
-  error?: string;
-}
+import { createTradePersistence } from './tradePersistence';
+import type { TradePersistence } from './tradePersistence';
+import type { TradeExecution } from './types';
 
 export class TradeExecutor {
   private readonly activeTrades = new Map<string, TradeExecution>();
   private readonly tradeHistory: TradeExecution[] = [];
 
-  constructor(private readonly api: GSwapAPI) {}
+  constructor(
+    private readonly api: GSwapAPI,
+    private readonly tradePersistence: TradePersistence = createTradePersistence(),
+  ) {}
 
   async executeArbitrage(opportunity: ArbitrageOpportunity): Promise<TradeExecution> {
     const execution: TradeExecution = {
@@ -60,7 +54,7 @@ export class TradeExecutor {
         execution.endTime = Date.now();
       }
     } finally {
-      this.finalizeExecution(execution);
+      await this.finalizeExecution(execution);
     }
 
     return execution;
@@ -337,12 +331,20 @@ export class TradeExecutor {
     };
   }
 
-  private finalizeExecution(execution: TradeExecution): void {
+  private async finalizeExecution(execution: TradeExecution): Promise<void> {
     this.activeTrades.delete(execution.id);
 
     const terminalStatuses: TradeExecution['status'][] = ['completed', 'failed', 'cancelled'];
     if (terminalStatuses.includes(execution.status)) {
       this.tradeHistory.push({ ...execution });
+
+      try {
+        await this.tradePersistence.record(execution);
+      } catch (error) {
+        console.error('⚠️  Failed to record trade execution:', error);
+      }
     }
   }
 }
+
+export type { TradeExecution } from './types';

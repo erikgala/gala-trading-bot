@@ -4,8 +4,8 @@ import {
   QuoteMap,
   SwapQuote,
   TradingPair,
-  buildQuoteCacheKey,
 } from '../api/gswap';
+import { buildQuoteCacheKey } from '../api/quotes';
 import { config } from '../config';
 import type { TokenInfo } from '../api/types';
 import type { BaseArbitrageOpportunity } from './arbitrage';
@@ -154,6 +154,7 @@ export class TriangularArbitrageDetector {
           continue;
         }
 
+
         const opportunity = await this.evaluateOpportunity({
           api,
           balanceSnapshot,
@@ -165,6 +166,7 @@ export class TriangularArbitrageDetector {
           secondQuote,
           thirdQuote,
         });
+
 
         if (opportunity) {
           opportunities.push(opportunity);
