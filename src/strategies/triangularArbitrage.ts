@@ -270,6 +270,18 @@ export class TriangularArbitrageDetector {
       return null;
     }
 
+    // Calculate market price and price discrepancy for triangular arbitrage
+    const buyPrice = tradeFirstQuote.inputAmount / tradeFirstQuote.outputAmount;
+    const sellPrice = tradeThirdQuote.outputAmount / tradeThirdQuote.inputAmount;
+    
+    if (!Number.isFinite(sellPrice) || !Number.isFinite(buyPrice)) {
+      return null;
+    }
+
+    // For triangular arbitrage, use the final sell price as market price
+    const currentMarketPrice = sellPrice;
+    const priceDiscrepancy = 0; // Triangular arbitrage doesn't have a direct market price comparison
+
     return {
       id: `tri-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       strategy: 'triangular',
@@ -285,6 +297,8 @@ export class TriangularArbitrageDetector {
       shortfall: fundsCheck.shortfall,
       timestamp: Date.now(),
       confidence: tradeProfitPercentage,
+      currentMarketPrice,
+      priceDiscrepancy,
       path: [
         {
           fromSymbol: galaToken.symbol,
