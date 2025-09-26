@@ -48,7 +48,7 @@ export const config: BotConfig = {
   mode: (process.env.BOT_MODE as BotMode) || 'polling',
   galaSwapApiUrl: process.env.GALASWAP_API_URL || 'https://dex-backend-prod1.defi.gala.com',
   mongoUri: process.env.MONGO_URI || '',
-  mongoDbName: process.env.MONGO_DB_NAME || '',
+  mongoDbName: process.env.MONGO_DB_NAME || 'trading-bot',
   mongoTradesCollection: process.env.MONGO_TRADES_COLLECTION || 'tradeExecutions',
 
   // Mock Trading Configuration
@@ -76,14 +76,30 @@ export function validateConfig(): void {
     throw new Error('BOT_MODE must be one of polling or streaming');
   }
 
-  if (!config.privateKey) {
-    throw new Error('PRIVATE_KEY is required');
+  const requiredEnvVars: Array<{ name: string; value: string | undefined }> = [
+    { name: 'PRIVATE_KEY', value: config.privateKey || undefined },
+    { name: 'WALLET_ADDRESS', value: config.walletAddress || undefined },
+    { name: 'MONGO_URI', value: config.mongoUri || undefined },
+  ];
+
+  if (config.mode === 'streaming') {
+    requiredEnvVars.push(
+      { name: 'KAFKA_API_URL', value: process.env.KAFKA_API_URL },
+      { name: 'KAFKA_API_KEY', value: process.env.KAFKA_API_KEY },
+      { name: 'KAFKA_API_SECRET', value: process.env.KAFKA_API_SECRET },
+      { name: 'KAFKA_TOPIC', value: process.env.KAFKA_TOPIC },
+    );
   }
-  
-  if (!config.walletAddress) {
-    throw new Error('WALLET_ADDRESS is required');
+
+  const missingEnvVars = requiredEnvVars
+    .filter(({ value }) => !value)
+    .map(({ name }) => name);
+
+  if (missingEnvVars.length > 0) {
+    const suffix = missingEnvVars.length > 1 ? 's' : '';
+    throw new Error(`Missing required environment variable${suffix}: ${missingEnvVars.join(', ')}`);
   }
-  
+
   if (config.minProfitThreshold <= 0) {
     throw new Error('MIN_PROFIT_THRESHOLD must be greater than 0');
   }
@@ -107,10 +123,6 @@ export function validateConfig(): void {
   const validStrategies: StrategySelection[] = ['direct', 'triangular', 'both'];
   if (!validStrategies.includes(config.arbitrageStrategy)) {
     throw new Error('ARBITRAGE_STRATEGY must be one of direct, triangular, or both');
-  }
-
-  if (!config.mongoUri || !config.mongoDbName) {
-    console.warn('ℹ️  MongoDB logging disabled. Set MONGO_URI and MONGO_DB_NAME to enable trade tracking.');
   }
 }
 

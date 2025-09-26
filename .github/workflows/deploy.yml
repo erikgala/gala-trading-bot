@@ -72,4 +72,8 @@ jobs:
               -e KAFKA_API_SECRET="${{ secrets.KAFKA_API_SECRET }}" \
               -e KAFKA_TOPIC="${{ secrets.KAFKA_TOPIC }}" \
               -e GALASWAP_API_URL="${{ secrets.GALASWAP_API_URL }}" \
+              -e BOT_MODE="${{ vars.BOT_MODE }}" \
+              -e ARBITRAGE_STRATEGY="${{ vars.ARBITRAGE_STRATEGY }}" \
+              -e MONGO_DB_NAME="${{ vars.MONGO_DB_NAME }}" \
+              -e MONGO_TRADES_COLLECTION="${{ vars.MONGO_TRADES_COLLECTION }}" \
               "${{ env.IMAGE_NAME }}:latest"

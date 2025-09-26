@@ -21,7 +21,6 @@ export function createKafkaConfig(): KafkaConfig {
 
 class GalaStreamingBot {
   private api: GSwapAPI;
-  private detector: ArbitrageDetector;
   private executor: TradeExecutor;
   private kafkaConsumer: KafkaBlockConsumer;
   private eventProcessor: RealTimeEventProcessor;
@@ -31,7 +30,6 @@ class GalaStreamingBot {
   constructor() {
     this.rateLimiter = new RateLimiter();
     this.api = new GSwapAPI(this.rateLimiter);
-    this.detector = new ArbitrageDetector();
     this.executor = new TradeExecutor(this.api);
     this.eventProcessor = new RealTimeEventProcessor(this.api);
 
