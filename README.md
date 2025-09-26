@@ -15,6 +15,22 @@ A sophisticated arbitrage trading bot for the GalaChain gSwap DEX built with Nod
 - **Real-time Monitoring**: Live statistics and trade monitoring
 - **TypeScript**: Full type safety and modern JavaScript features
 
+## Project Suite
+
+This repository now contains a small suite of projects that work together:
+
+- **Trading Bot (`/src`)** – the original arbitrage bot capable of running standalone or in Docker.
+- **Monitoring API (`projects/api-server`)** – Node.js service that streams MongoDB trade data over WebSockets and exposes REST endpoints for dashboards.
+- **Monitoring Client (`projects/client`)** – Vite + React dashboard that consumes the API and visualises live profit/loss.
+
+Each project has its own `package.json`. Install dependencies as needed, for example:
+
+```bash
+npm install                              # bot
+npm install --prefix projects/api-server # monitoring API
+npm install --prefix projects/client     # monitoring client
+```
+
 ## Quick Start
 
 1. **Clone and Install**
@@ -51,6 +67,20 @@ A sophisticated arbitrage trading bot for the GalaChain gSwap DEX built with Nod
    # or
    MOCK_MODE=true npm run streaming
    ```
+
+4. **(Optional) Run the Monitoring Stack Locally**
+
+   With MongoDB enabled for the bot, you can stream trades into a dashboard:
+
+   ```bash
+   # Terminal 1 – monitoring API
+   npm run dev --prefix projects/api-server
+
+   # Terminal 2 – monitoring client
+   npm run dev --prefix projects/client
+   ```
+
+   By default the API listens on `http://localhost:4400` and the client on `http://localhost:5173`.
 
 ## Docker
 
@@ -151,15 +181,14 @@ src/
 ├── strategies/       # Arbitrage detection strategies
 ├── trader/           # Trade execution engine
 ├── mock/             # Mock trading system
-│   ├── mockWallet.ts      # Mock wallet with balances
-│   ├── mockTradeExecutor.ts # Mock trade execution
-│   └── csvLogger.ts       # CSV transaction logging
 ├── streaming/        # Real-time streaming mode
-│   ├── kafkaConsumer.ts   # Kafka message consumer
-│   ├── eventProcessor.ts  # Block event processing
-│   ├── index.ts          # Streaming bot and helpers
-│   └── types.ts          # Streaming data types
 └── index.ts          # Main entry point (polling or streaming via BOT_MODE)
+
+projects/
+├── api-server/       # Monitoring API (Express + WebSocket)
+│   └── src/
+└── client/           # Monitoring dashboard (Vite + React)
+    └── src/
 ```
 
 ## Trading Strategies
@@ -220,6 +249,17 @@ The bot provides real-time statistics including:
 - Profit/loss tracking
 - Active trade status
 - Mock trading statistics (when in mock mode)
+
+When MongoDB logging is enabled you can also stream data into the dedicated monitoring stack:
+
+- **Monitoring API** (`projects/api-server`)
+  - REST endpoints: `/api/summary`, `/api/trades/recent`, `/api/trades/:executionId`
+  - WebSocket feed: `ws://localhost:4400/ws/trades` (configurable via environment variables)
+  - Broadcasts trade inserts/updates by tailing MongoDB change streams and falls back to HTTP polling if streams are unavailable.
+- **Monitoring Client** (`projects/client`)
+  - React dashboard that consumes the WebSocket feed and falls back to REST polling
+  - Displays live profit/loss aggregates and the most recent executions
+  - Configure via `VITE_MONITORING_*` variables or let it use sensible defaults
 
 ## Development
 

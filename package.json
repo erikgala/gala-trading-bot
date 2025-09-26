@@ -15,7 +15,11 @@
     "test:ci": "jest --ci --coverage --watchAll=false",
     "prepare": "husky install",
     "start:ts": "ts-node src/index.ts",
-    "start:streaming": "BOT_MODE=streaming node dist/index.js"
+    "start:streaming": "BOT_MODE=streaming node dist/index.js",
+    "monitor:api": "npm run dev --prefix projects/api-server",
+    "monitor:api:build": "npm run build --prefix projects/api-server",
+    "monitor:client": "npm run dev --prefix projects/client",
+    "monitor:client:build": "npm run build --prefix projects/client"
   },
   "keywords": [],
   "author": "",
