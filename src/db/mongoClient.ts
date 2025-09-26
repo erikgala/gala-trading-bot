@@ -29,20 +29,7 @@ export async function getMongoClient(): Promise<MongoClient> {
     connectionAttempts++;
     console.log(`🔄 Attempting MongoDB connection (attempt ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS})...`);
     
-    const client = new MongoClient(config.mongoUri, {
-      // SSL/TLS configuration
-      tls: true,
-      tlsAllowInvalidCertificates: false,
-      tlsAllowInvalidHostnames: false,
-      // Connection options
-      maxPoolSize: 5,
-      serverSelectionTimeoutMS: 10000, // 10 seconds
-      socketTimeoutMS: 30000, // 30 seconds
-      connectTimeoutMS: 10000, // 10 seconds
-      // Disable automatic retries
-      retryWrites: false,
-      retryReads: false,
-    });
+    const client = new MongoClient(config.mongoUri);
 
     clientPromise = client
       .connect()
@@ -101,7 +88,6 @@ export async function ensureMongoConnection(): Promise<boolean> {
     return client !== undefined;
   } catch (error) {
     console.error('❌ Failed to connect to MongoDB:', error instanceof Error ? error.message : 'Unknown error');
-    console.log('⚠️  Bot will continue running without database logging');
     return false;
   }
 }

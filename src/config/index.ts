@@ -46,6 +46,7 @@ export const config: BotConfig = {
   privateKey: process.env.PRIVATE_KEY || '',
   walletAddress: process.env.WALLET_ADDRESS || '',
   mode: (process.env.BOT_MODE as BotMode) || 'polling',
+  arbitrageStrategy: (process.env.ARBITRAGE_STRATEGY as StrategySelection) || 'direct',
   galaSwapApiUrl: process.env.GALASWAP_API_URL || 'https://dex-backend-prod1.defi.gala.com',
   mongoUri: process.env.MONGO_URI || '',
   mongoDbName: process.env.MONGO_DB_NAME || 'trading-bot',
@@ -61,10 +62,9 @@ export const config: BotConfig = {
   // Constants
   minProfitThreshold: 0.5, // 0.5%
   maxTradeAmount: 3000,
-  pollingInterval: 5000, // 5 seconds
+  pollingInterval: 15000, // 5 seconds
   slippageTolerance: 5.0, // 5%
   balanceRefreshInterval: 0, // 0 = disabled
-  arbitrageStrategy: 'direct',
   maxConcurrentTrades: 3,
   stopLossPercentage: 5.0, // 5%
 };

@@ -41,10 +41,10 @@ class GalaStreamingBot {
     try {
       validateConfig();
 
-      // MongoDB connection is optional - don't fail if it can't connect
+      // MongoDB connection is required
       const mongoConnected = await ensureMongoConnection();
       if (!mongoConnected) {
-        console.log('⚠️  Running without database logging');
+        throw new Error('Unable to connect to MongoDB');
       }
 
       await this.api.loadAvailableTokens();
