@@ -20,10 +20,25 @@ export async function getMongoClient(): Promise<MongoClient> {
   }
 
   if (!clientPromise) {
-    clientPromise = new MongoClient(config.mongoUri)
+    const client = new MongoClient(config.mongoUri, {
+      // SSL/TLS configuration
+      tls: true,
+      tlsAllowInvalidCertificates: false,
+      tlsAllowInvalidHostnames: false,
+      // Connection options
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      // Retry configuration
+      retryWrites: true,
+      retryReads: true,
+    });
+
+    clientPromise = client
       .connect()
       .catch(error => {
         clientPromise = null;
+        console.error('❌ MongoDB connection failed:', error.message);
         throw error;
       });
   }
