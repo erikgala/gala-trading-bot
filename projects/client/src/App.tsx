@@ -6,9 +6,9 @@ const WEBSOCKET_URL = (import.meta.env.VITE_MONITORING_WS_URL as string | undefi
 const MAX_TRADES = Number(import.meta.env.VITE_MONITORING_MAX_TRADES ?? 100);
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
+  style: 'decimal',
   minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
 const percentageFormatter = new Intl.NumberFormat('en-US', {

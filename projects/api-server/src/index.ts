@@ -5,8 +5,18 @@ import fs from 'fs';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express, { Request, Response } from 'express';
-import { MongoClient, Collection, ChangeStream, Document } from 'mongodb';
+import {
+  MongoClient,
+  Collection,
+  ChangeStream,
+  ChangeStreamInsertDocument,
+  ChangeStreamReplaceDocument,
+  ChangeStreamUpdateDocument,
+  Document,
+} from 'mongodb';
 import { WebSocketServer, WebSocket } from 'ws';
+
+import { TokenPriceService } from './tokenPriceService';
 
 interface TradeDocument {
   executionId: string;
@@ -38,6 +48,19 @@ interface TradeDocument {
   recordedAt: Date;
 }
 
+interface ProfitOriginalAmounts {
+  currency: string;
+  estimated: number;
+  actual: number | null;
+  effective: number;
+}
+
+type PublicProfitPayload = TradeDocument['profit'] & {
+  effective: number;
+  currency: string;
+  original?: ProfitOriginalAmounts;
+};
+
 interface PublicTradePayload {
   executionId: string;
   strategy: TradeDocument['strategy'];
@@ -47,7 +70,7 @@ interface PublicTradePayload {
   entryToken: TradeDocument['entryToken'];
   exitToken: TradeDocument['exitToken'];
   amount: TradeDocument['amount'];
-  profit: TradeDocument['profit'] & { effective: number };
+  profit: PublicProfitPayload;
   balance: TradeDocument['balance'];
   error: TradeDocument['error'];
   environment: TradeDocument['environment'];
@@ -111,6 +134,7 @@ app.use(express.json());
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: WS_PATH });
 const clients = new Set<WebSocket>();
+const priceService = new TokenPriceService();
 
 let mongoClient: MongoClient | null = null;
 let tradeCollection: Collection<TradeDocument> | null = null;
@@ -126,7 +150,37 @@ function calculateEffectiveProfit(trade: TradeDocument): number {
   return trade.profit.estimated;
 }
 
+function determineProfitCurrency(trade: TradeDocument): string {
+  const exitSymbol = trade.exitToken?.symbol;
+  if (exitSymbol && typeof exitSymbol === 'string') {
+    return exitSymbol.toUpperCase();
+  }
+
+  const entrySymbol = trade.entryToken?.symbol;
+  if (entrySymbol && typeof entrySymbol === 'string') {
+    return entrySymbol.toUpperCase();
+  }
+
+  return 'USD';
+}
+
+function normalizeNumericValue(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (value && typeof (value as { toString: () => string }).toString === 'function') {
+    const numeric = Number((value as { toString: () => string }).toString());
+    return Number.isFinite(numeric) ? numeric : 0;
+  }
+
+  return 0;
+}
+
 function mapTrade(trade: TradeDocument): PublicTradePayload {
+  const effectiveProfit = calculateEffectiveProfit(trade);
+  const profitCurrency = determineProfitCurrency(trade);
+
   return {
     executionId: trade.executionId,
     strategy: trade.strategy,
@@ -138,7 +192,8 @@ function mapTrade(trade: TradeDocument): PublicTradePayload {
     amount: trade.amount,
     profit: {
       ...trade.profit,
-      effective: calculateEffectiveProfit(trade),
+      effective: effectiveProfit,
+      currency: profitCurrency,
     },
     balance: trade.balance,
     error: trade.error,
@@ -146,15 +201,72 @@ function mapTrade(trade: TradeDocument): PublicTradePayload {
   };
 }
 
+function cloneProfitOriginal(profit: PublicProfitPayload): ProfitOriginalAmounts {
+  return {
+    currency: profit.currency,
+    estimated: profit.estimated,
+    actual: profit.actual ?? null,
+    effective: profit.effective,
+  };
+}
+
+async function convertProfitToUsd(trade: PublicTradePayload): Promise<PublicTradePayload> {
+  const currentCurrency = trade.profit.currency;
+
+  if (currentCurrency === 'USD' && trade.profit.original) {
+    return trade;
+  }
+
+  const original = cloneProfitOriginal(trade.profit);
+  const priceUsd = await priceService.getPriceUsd(currentCurrency);
+
+  if (priceUsd === null) {
+    return {
+      ...trade,
+      profit: {
+        ...trade.profit,
+        original,
+      },
+    };
+  }
+
+  const convertNumber = (value: number): number => value * priceUsd;
+  const convertNullable = (value: number | null): number | null => (value === null ? null : value * priceUsd);
+
+  return {
+    ...trade,
+    profit: {
+      ...trade.profit,
+      estimated: convertNumber(original.estimated),
+      actual: convertNullable(original.actual),
+      effective: convertNumber(original.effective),
+      currency: 'USD',
+      original,
+    },
+  };
+}
+
+async function convertTradesToUsd(trades: PublicTradePayload[]): Promise<PublicTradePayload[]> {
+  return Promise.all(trades.map(trade => convertProfitToUsd(trade)));
+}
+
 async function computeSummary(): Promise<ProfitSummary> {
   if (!tradeCollection) {
     throw new Error('MongoDB not initialised');
   }
 
+  interface SummaryAggregationResult {
+    _id: string | null;
+    totalProfit: number;
+    realizedProfit: number;
+    totalTrades: number;
+    profitableTrades: number;
+  }
+
   const pipeline = [
     {
       $group: {
-        _id: null,
+        _id: '$exitToken.symbol',
         totalProfit: {
           $sum: {
             $ifNull: ['$profit.actual', '$profit.estimated'],
@@ -186,9 +298,9 @@ async function computeSummary(): Promise<ProfitSummary> {
     },
   ];
 
-  const [result] = await tradeCollection.aggregate(pipeline).toArray();
+  const aggregation = await tradeCollection.aggregate<SummaryAggregationResult>(pipeline).toArray();
 
-  if (!result) {
+  if (aggregation.length === 0) {
     return {
       totalProfit: 0,
       realizedProfit: 0,
@@ -200,17 +312,38 @@ async function computeSummary(): Promise<ProfitSummary> {
     };
   }
 
-  const totalProfit = typeof result.totalProfit === 'number' ? result.totalProfit : 0;
-  const realizedProfit = typeof result.realizedProfit === 'number' ? result.realizedProfit : 0;
-  const totalTrades = typeof result.totalTrades === 'number' ? result.totalTrades : 0;
-  const profitableTrades = typeof result.profitableTrades === 'number' ? result.profitableTrades : 0;
+  let totalProfitUsd = 0;
+  let realizedProfitUsd = 0;
+  let totalTrades = 0;
+  let profitableTrades = 0;
 
-  const averageProfitPerTrade = totalTrades > 0 ? totalProfit / totalTrades : 0;
-  const unrealizedProfit = totalProfit - realizedProfit;
+  for (const group of aggregation) {
+    const symbol = typeof group._id === 'string' && group._id.length > 0 ? group._id : '';
+    const normalizedSymbol = symbol.toUpperCase();
+    const priceUsd = await priceService.getPriceUsd(normalizedSymbol);
+
+    const totalProfit = normalizeNumericValue(group.totalProfit);
+    const realizedProfit = normalizeNumericValue(group.realizedProfit);
+    const groupTotalTrades = normalizeNumericValue(group.totalTrades);
+    const groupProfitableTrades = normalizeNumericValue(group.profitableTrades);
+
+    if (priceUsd === null) {
+      logger.warn(`No USD price available for token ${normalizedSymbol || 'UNKNOWN'}; excluding from summary.`);
+    } else {
+      totalProfitUsd += totalProfit * priceUsd;
+      realizedProfitUsd += realizedProfit * priceUsd;
+    }
+
+    totalTrades += groupTotalTrades;
+    profitableTrades += groupProfitableTrades;
+  }
+
+  const averageProfitPerTrade = totalTrades > 0 ? totalProfitUsd / totalTrades : 0;
+  const unrealizedProfit = totalProfitUsd - realizedProfitUsd;
 
   return {
-    totalProfit,
-    realizedProfit,
+    totalProfit: totalProfitUsd,
+    realizedProfit: realizedProfitUsd,
     unrealizedProfit,
     averageProfitPerTrade,
     totalTrades,
@@ -228,7 +361,8 @@ async function fetchRecentTrades(limit = RECENT_LIMIT): Promise<PublicTradePaylo
     .find({}, { sort: { startTime: -1 }, limit })
     .map(mapTrade);
 
-  return cursor.toArray();
+  const trades = await cursor.toArray();
+  return convertTradesToUsd(trades);
 }
 
 function broadcast(message: BroadcastMessage): void {
@@ -259,22 +393,35 @@ async function initialiseMongo(): Promise<void> {
         return;
       }
 
-      if (!['insert', 'update', 'replace'].includes(change.operationType)) {
+      if (
+        change.operationType !== 'insert' &&
+        change.operationType !== 'update' &&
+        change.operationType !== 'replace'
+      ) {
         return;
       }
 
-      const fullDocument = change.fullDocument ?? (await tradeCollection.findOne(change.documentKey as Document));
+      const changeWithDocument =
+        change as
+          | ChangeStreamInsertDocument<TradeDocument>
+          | ChangeStreamUpdateDocument<TradeDocument>
+          | ChangeStreamReplaceDocument<TradeDocument>;
+
+      const fullDocument =
+        changeWithDocument.fullDocument ??
+        (await tradeCollection.findOne(changeWithDocument.documentKey as Document));
       if (!fullDocument) {
         return;
       }
 
       const trade = mapTrade(fullDocument as TradeDocument);
+      const tradeWithUsd = await convertProfitToUsd(trade);
       latestSummary = await computeSummary();
 
       broadcast({
         type: 'trade',
         payload: {
-          trade,
+          trade: tradeWithUsd,
           summary: latestSummary,
         },
       });
@@ -341,7 +488,9 @@ app.get('/api/trades/:executionId', async (req: Request, res: Response) => {
       return;
     }
 
-    res.json(mapTrade(trade));
+    const mappedTrade = mapTrade(trade);
+    const tradeWithUsd = await convertProfitToUsd(mappedTrade);
+    res.json(tradeWithUsd);
   } catch (error) {
     logger.error('Failed to fetch trade by executionId', error);
     res.status(500).json({ error: 'Failed to fetch trade' });
