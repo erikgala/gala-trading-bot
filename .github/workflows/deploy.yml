@@ -49,6 +49,19 @@ jobs:
               docker stop "${{ env.CONTAINER_NAME }}" || true
               docker rm "${{ env.CONTAINER_NAME }}" || true
             fi
+            
+            # Debug: Check if secrets are available
+            echo "Checking secrets availability..."
+            if [ -z "${{ secrets.PRIVATE_KEY }}" ]; then
+              echo "ERROR: PRIVATE_KEY secret is not set!"
+              exit 1
+            fi
+            if [ -z "${{ secrets.WALLET_ADDRESS }}" ]; then
+              echo "ERROR: WALLET_ADDRESS secret is not set!"
+              exit 1
+            fi
+            echo "Secrets are available, starting container..."
+            
             docker run -d --name "${{ env.CONTAINER_NAME }}" --restart unless-stopped \
               -e PRIVATE_KEY="${{ secrets.PRIVATE_KEY }}" \
               -e WALLET_ADDRESS="${{ secrets.WALLET_ADDRESS }}" \
