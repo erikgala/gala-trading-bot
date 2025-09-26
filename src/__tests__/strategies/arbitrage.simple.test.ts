@@ -16,7 +16,11 @@ jest.mock('../../api/gswap');
 const MockedGSwapAPI = GSwapAPI as jest.MockedClass<typeof GSwapAPI>;
 
 const createMockBalanceSnapshot = (balance = 10_000): BalanceSnapshot => {
-  const balances = new Map<string, number>([['GALA|Unit|none|none', balance]]);
+  const balances = new Map<string, number>([
+    ['GALA|Unit|none|none', balance],
+    ['GUSDC|Unit|none|none', balance],
+    ['GWBTC|Unit|none|none', balance],
+  ]);
   return new RealBalanceSnapshot(balances, Date.now());
 };
 
@@ -81,10 +85,13 @@ describe('ArbitrageDetector', () => {
     balanceSnapshot = createMockBalanceSnapshot();
 
     mockApi.getBalanceSnapshot.mockResolvedValue(balanceSnapshot);
-    mockApi.checkTradingFunds.mockResolvedValue({
-      hasFunds: true,
-      currentBalance: balanceSnapshot.getBalance('GALA|Unit|none|none'),
-      shortfall: 0,
+    mockApi.checkTradingFunds.mockImplementation(async (requiredAmount, tokenClass) => {
+      const currentBalance = balanceSnapshot.getBalance(tokenClass);
+      return {
+        hasFunds: currentBalance >= requiredAmount,
+        currentBalance,
+        shortfall: Math.max(0, requiredAmount - currentBalance),
+      };
     });
     mockApi.createTokenClassKey.mockImplementation(({ collection, category, type, additionalKey }) => (
       `${collection}|${category}|${type}|${additionalKey}`
@@ -165,9 +172,9 @@ describe('ArbitrageDetector', () => {
     }
   });
 
-  it('ignores pairs that do not involve GALA', async () => {
-    const nonGalaPair = createMockTradingPair('GUSDC', 'GUSDT');
-    const opportunities = await detector.detectAllOpportunities([nonGalaPair], mockApi, new Map());
+  it('ignores pairs that are not supported', async () => {
+    const unsupportedPair = createMockTradingPair('GUSDC', 'GSOL');
+    const opportunities = await detector.detectAllOpportunities([unsupportedPair], mockApi, new Map());
     expect(opportunities).toHaveLength(0);
   });
 });

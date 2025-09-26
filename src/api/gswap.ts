@@ -12,6 +12,7 @@ import type {
   UserAssetsResponse,
 } from './types';
 import { RateLimiter } from '../streaming/rateLimiter';
+import { getSupportedTokenClassPairs, isSupportedPair } from '../config/tradingPairs';
 
 export { BalanceSnapshot } from './balanceManager';
 export { buildQuoteCacheKey } from './quotes';
@@ -71,68 +72,53 @@ export class GSwapAPI {
   async getTradingPairs(): Promise<TradingPair[]> {
     try {
       const tokens = await this.getAvailableTokens();
+      const tokensByClass = new Map(tokens.map(token => [token.tokenClass, token]));
       const pairs: TradingPair[] = [];
       const quoteMap: QuoteMap = new Map();
 
-      const galaToken = tokens.find(token => token.tokenClass === 'GALA|Unit|none|none');
-      if (!galaToken) {
-        console.warn('⚠️  GALA token not found in available tokens');
-        this.latestQuoteMap = quoteMap;
-        return [];
-      }
+      for (const [tokenClassA, tokenClassB] of getSupportedTokenClassPairs()) {
+        const tokenA = tokensByClass.get(tokenClassA);
+        const tokenB = tokensByClass.get(tokenClassB);
 
-      const tokensToCheck = tokens.filter(token => token.tokenClass !== galaToken.tokenClass);
-      const concurrencyLimit = Math.max(1, Math.min(5, tokensToCheck.length));
-      let index = 0;
-
-      const processNext = async (): Promise<void> => {
-        while (true) {
-          const currentIndex = index++;
-          if (currentIndex >= tokensToCheck.length) {
-            return;
-          }
-
-          const otherToken = tokensToCheck[currentIndex];
-
-          try {
-            const [quoteAB, quoteBA] = await Promise.all([
-              this.getQuote(galaToken.tokenClass, otherToken.tokenClass, 1),
-              this.getQuote(otherToken.tokenClass, galaToken.tokenClass, 1),
-            ]);
-
-            const timestamp = Date.now();
-
-            if (quoteAB) {
-              quoteMap.set(
-                buildQuoteCacheKey(galaToken.tokenClass, otherToken.tokenClass, quoteAB.inputAmount),
-                { quote: quoteAB, timestamp },
-              );
-            }
-
-            if (quoteBA) {
-              quoteMap.set(
-                buildQuoteCacheKey(otherToken.tokenClass, galaToken.tokenClass, quoteBA.inputAmount),
-                { quote: quoteBA, timestamp },
-              );
-            }
-
-            if (quoteAB && quoteBA) {
-              pairs.push({
-                tokenA: galaToken,
-                tokenB: otherToken,
-                tokenClassA: galaToken.tokenClass,
-                tokenClassB: otherToken.tokenClass,
-              });
-            } else {
-              console.warn(`No liquidity for GALA <-> ${otherToken.symbol}`);
-            }
-          } catch (error) {
-            console.warn(`Error fetching quotes for GALA <-> ${otherToken.symbol}:`, error);
-          }
+        if (!tokenA || !tokenB) {
+          console.warn(`⚠️  Missing token information for pair ${tokenClassA} <-> ${tokenClassB}`);
+          continue;
         }
-      };
 
-      await Promise.all(Array.from({ length: concurrencyLimit }, () => processNext()));
+        try {
+          const quoteAB = await this.getQuote(tokenClassA, tokenClassB, 1);
+          const quoteBA = await this.getQuote(tokenClassB, tokenClassA, 1);
+
+          const timestamp = Date.now();
+
+          if (quoteAB) {
+            quoteMap.set(
+              buildQuoteCacheKey(tokenClassA, tokenClassB, quoteAB.inputAmount),
+              { quote: quoteAB, timestamp },
+            );
+          }
+
+          if (quoteBA) {
+            quoteMap.set(
+              buildQuoteCacheKey(tokenClassB, tokenClassA, quoteBA.inputAmount),
+              { quote: quoteBA, timestamp },
+            );
+          }
+
+          if (quoteAB && quoteBA) {
+            pairs.push({
+              tokenA,
+              tokenB,
+              tokenClassA,
+              tokenClassB,
+            });
+          } else if (!quoteAB && !quoteBA) {
+            console.warn(`No liquidity for ${tokenA.symbol} <-> ${tokenB.symbol}`);
+          }
+        } catch (error) {
+          console.warn(`Error fetching quotes for ${tokenA.symbol} <-> ${tokenB.symbol}:`, error);
+        }
+      }
 
       this.latestQuoteMap = quoteMap;
 
@@ -161,6 +147,10 @@ export class GSwapAPI {
     inputAmount: number,
   ): Promise<SwapQuote | null> {
     try {
+      if (!isSupportedPair(inputTokenClass, outputTokenClass)) {
+        return null;
+      }
+
       const key = `${inputTokenClass}-${outputTokenClass}`;
       if(this.noPoolAvailableCache.has(key)) {
         return null;

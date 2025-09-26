@@ -9,9 +9,9 @@ import {
 import { config } from '../config';
 import type { DexV3Operation } from '../streaming/types';
 import type { TriangularArbitrageOpportunity } from './triangularArbitrage';
+import { isSupportedPair } from '../config/tradingPairs';
 
 const QUOTE_CACHE_TTL_MS = 30_000;
-const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
 
 export type ArbitrageStrategyType = 'direct' | 'triangular';
 
@@ -174,7 +174,7 @@ export class ArbitrageDetector {
     const tokenInClassKey = api.createTokenClassKey(swapData.tokenIn);
     const tokenOutClassKey = api.createTokenClassKey(swapData.tokenOut);
 
-    if (!this.involvesGala(tokenInClassKey, tokenOutClassKey)) {
+    if (!isSupportedPair(tokenInClassKey, tokenOutClassKey)) {
       return [];
     }
 
@@ -216,7 +216,7 @@ export class ArbitrageDetector {
     const opportunities: ArbitrageOpportunity[] = [];
 
     for (const pair of pairs) {
-      if (!this.involvesGala(pair.tokenClassA, pair.tokenClassB)) {
+      if (!isSupportedPair(pair.tokenClassA, pair.tokenClassB)) {
         continue;
       }
 
@@ -236,10 +236,6 @@ export class ArbitrageDetector {
     }
 
     return opportunities.sort((a, b) => b.profitPercentage - a.profitPercentage);
-  }
-
-  private involvesGala(tokenClassA: string, tokenClassB: string): boolean {
-    return tokenClassA === GALA_TOKEN_CLASS || tokenClassB === GALA_TOKEN_CLASS;
   }
 
   private async evaluateDirectArbitrage({

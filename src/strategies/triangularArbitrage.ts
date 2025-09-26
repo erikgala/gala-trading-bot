@@ -7,12 +7,12 @@ import {
 } from '../api/gswap';
 import { buildQuoteCacheKey } from '../api/quotes';
 import { config } from '../config';
+import { isSupportedPair } from '../config/tradingPairs';
 import type { TokenInfo } from '../api/types';
 import type { BaseArbitrageOpportunity } from './arbitrage';
 
 const QUOTE_CACHE_TTL_MS = 30_000;
 const TEST_TRADE_AMOUNT = 1;
-const GALA_TOKEN_CLASS = 'GALA|Unit|none|none';
 
 interface CachedQuoteEntry {
   quote: SwapQuote;
@@ -29,6 +29,10 @@ class CachedQuoteProvider {
     outputTokenClass: string,
     inputAmount: number,
   ): Promise<SwapQuote | null> {
+    if (!isSupportedPair(inputTokenClass, outputTokenClass)) {
+      return null;
+    }
+
     const cacheKey = buildQuoteCacheKey(inputTokenClass, outputTokenClass, inputAmount);
     const now = Date.now();
 
@@ -89,6 +93,9 @@ function extractTokensFromPairs(pairs: TradingPair[]): Map<string, TokenInfo> {
   return map;
 }
 
+const buildPairKey = (tokenClassA: string, tokenClassB: string): string =>
+  [tokenClassA, tokenClassB].sort().join('::');
+
 export class TriangularArbitrageDetector {
   async detectAllOpportunities(
     pairs: TradingPair[],
@@ -100,76 +107,88 @@ export class TriangularArbitrageDetector {
     }
 
     const tokensByClass = extractTokensFromPairs(pairs);
-    const galaToken = tokensByClass.get(GALA_TOKEN_CLASS);
+    const tokenList = Array.from(tokensByClass.values());
 
-    if (!galaToken) {
-      return [];
-    }
-
-    const otherTokens = Array.from(tokensByClass.values()).filter(
-      token => token.tokenClass !== GALA_TOKEN_CLASS,
-    );
-
-    if (otherTokens.length < 2) {
+    if (tokenList.length < 3) {
       return [];
     }
 
     const provider = new CachedQuoteProvider(api, quoteMap);
     const balanceSnapshot = await api.getBalanceSnapshot();
     const opportunities: TriangularArbitrageOpportunity[] = [];
+    const pairAvailability = new Set<string>();
+    const evaluatedCycles = new Set<string>();
 
-    for (const firstToken of otherTokens) {
-      const firstQuote = await provider.getQuote(
-        galaToken.tokenClass,
-        firstToken.tokenClass,
-        TEST_TRADE_AMOUNT,
-      );
+    for (const pair of pairs) {
+      pairAvailability.add(buildPairKey(pair.tokenClassA, pair.tokenClassB));
+    }
 
-      if (!isValidQuote(firstQuote)) {
-        continue;
-      }
+    const hasPair = (tokenClassA: string, tokenClassB: string): boolean =>
+      isSupportedPair(tokenClassA, tokenClassB) && pairAvailability.has(buildPairKey(tokenClassA, tokenClassB));
 
-      for (const secondToken of otherTokens) {
-        if (secondToken.tokenClass === firstToken.tokenClass) {
+    for (let i = 0; i < tokenList.length - 2; i++) {
+      const tokenA = tokenList[i];
+
+      for (let j = i + 1; j < tokenList.length - 1; j++) {
+        const tokenB = tokenList[j];
+
+        if (!hasPair(tokenA.tokenClass, tokenB.tokenClass)) {
           continue;
         }
 
-        const secondQuote = await provider.getQuote(
-          firstToken.tokenClass,
-          secondToken.tokenClass,
-          firstQuote.outputAmount,
-        );
+        for (let k = j + 1; k < tokenList.length; k++) {
+          const tokenC = tokenList[k];
 
-        if (!isValidQuote(secondQuote)) {
-          continue;
-        }
+          if (
+            !hasPair(tokenB.tokenClass, tokenC.tokenClass) ||
+            !hasPair(tokenC.tokenClass, tokenA.tokenClass)
+          ) {
+            continue;
+          }
 
-        const thirdQuote = await provider.getQuote(
-          secondToken.tokenClass,
-          galaToken.tokenClass,
-          secondQuote.outputAmount,
-        );
+          const permutations: Array<[TokenInfo, TokenInfo, TokenInfo]> = [
+            [tokenA, tokenB, tokenC],
+            [tokenB, tokenC, tokenA],
+            [tokenC, tokenA, tokenB],
+          ];
 
-        if (!isValidQuote(thirdQuote)) {
-          continue;
-        }
+          for (const [entryToken, middleToken, lastToken] of permutations) {
+            const primaryKey = `${entryToken.tokenClass}->${middleToken.tokenClass}->${lastToken.tokenClass}`;
+            if (!evaluatedCycles.has(primaryKey)) {
+              evaluatedCycles.add(primaryKey);
+              const opportunity = await this.evaluateOpportunity({
+                api,
+                balanceSnapshot,
+                provider,
+                firstToken: entryToken,
+                secondToken: middleToken,
+                thirdToken: lastToken,
+                pairAvailability,
+              });
 
+              if (opportunity) {
+                opportunities.push(opportunity);
+              }
+            }
 
-        const opportunity = await this.evaluateOpportunity({
-          api,
-          balanceSnapshot,
-          provider,
-          galaToken,
-          firstToken,
-          secondToken,
-          firstQuote,
-          secondQuote,
-          thirdQuote,
-        });
+            const reverseKey = `${entryToken.tokenClass}->${lastToken.tokenClass}->${middleToken.tokenClass}`;
+            if (!evaluatedCycles.has(reverseKey)) {
+              evaluatedCycles.add(reverseKey);
+              const reverseOpportunity = await this.evaluateOpportunity({
+                api,
+                balanceSnapshot,
+                provider,
+                firstToken: entryToken,
+                secondToken: lastToken,
+                thirdToken: middleToken,
+                pairAvailability,
+              });
 
-
-        if (opportunity) {
-          opportunities.push(opportunity);
+              if (reverseOpportunity) {
+                opportunities.push(reverseOpportunity);
+              }
+            }
+          }
         }
       }
     }
@@ -181,24 +200,65 @@ export class TriangularArbitrageDetector {
     api: GSwapAPI;
     balanceSnapshot: BalanceSnapshot;
     provider: CachedQuoteProvider;
-    galaToken: TokenInfo;
     firstToken: TokenInfo;
     secondToken: TokenInfo;
-    firstQuote: SwapQuote;
-    secondQuote: SwapQuote;
-    thirdQuote: SwapQuote;
+    thirdToken: TokenInfo;
+    pairAvailability: Set<string>;
   }): Promise<TriangularArbitrageOpportunity | null> {
     const {
       api,
       balanceSnapshot,
       provider,
-      galaToken,
       firstToken,
       secondToken,
-      firstQuote,
-      secondQuote,
-      thirdQuote,
+      thirdToken,
+      pairAvailability,
     } = params;
+
+    const firstSecondKey = buildPairKey(firstToken.tokenClass, secondToken.tokenClass);
+    const secondThirdKey = buildPairKey(secondToken.tokenClass, thirdToken.tokenClass);
+    const thirdFirstKey = buildPairKey(thirdToken.tokenClass, firstToken.tokenClass);
+
+    if (
+      !isSupportedPair(firstToken.tokenClass, secondToken.tokenClass) ||
+      !isSupportedPair(secondToken.tokenClass, thirdToken.tokenClass) ||
+      !isSupportedPair(thirdToken.tokenClass, firstToken.tokenClass) ||
+      !pairAvailability.has(firstSecondKey) ||
+      !pairAvailability.has(secondThirdKey) ||
+      !pairAvailability.has(thirdFirstKey)
+    ) {
+      return null;
+    }
+
+    const firstQuote = await provider.getQuote(
+      firstToken.tokenClass,
+      secondToken.tokenClass,
+      TEST_TRADE_AMOUNT,
+    );
+
+    if (!isValidQuote(firstQuote)) {
+      return null;
+    }
+
+    const secondQuote = await provider.getQuote(
+      secondToken.tokenClass,
+      thirdToken.tokenClass,
+      firstQuote.outputAmount,
+    );
+
+    if (!isValidQuote(secondQuote)) {
+      return null;
+    }
+
+    const thirdQuote = await provider.getQuote(
+      thirdToken.tokenClass,
+      firstToken.tokenClass,
+      secondQuote.outputAmount,
+    );
+
+    if (!isValidQuote(thirdQuote)) {
+      return null;
+    }
 
     const startingAmount = firstQuote.inputAmount;
     const finalAmount = thirdQuote.outputAmount;
@@ -217,7 +277,7 @@ export class TriangularArbitrageDetector {
     const maxTradeAmount = config.maxTradeAmount;
     const fundsCheck = await api.checkTradingFunds(
       maxTradeAmount,
-      galaToken.tokenClass,
+      firstToken.tokenClass,
       balanceSnapshot,
     );
 
@@ -227,19 +287,15 @@ export class TriangularArbitrageDetector {
       return null;
     }
 
-    const tradeFirstQuote = await provider.getQuote(
-      galaToken.tokenClass,
-      firstToken.tokenClass,
-      amountToTrade,
-    );
+    const tradeFirstQuote = await provider.getQuote(firstToken.tokenClass, secondToken.tokenClass, amountToTrade);
 
     if (!isValidQuote(tradeFirstQuote)) {
       return null;
     }
 
     const tradeSecondQuote = await provider.getQuote(
-      firstToken.tokenClass,
       secondToken.tokenClass,
+      thirdToken.tokenClass,
       tradeFirstQuote.outputAmount,
     );
 
@@ -248,8 +304,8 @@ export class TriangularArbitrageDetector {
     }
 
     const tradeThirdQuote = await provider.getQuote(
-      secondToken.tokenClass,
-      galaToken.tokenClass,
+      thirdToken.tokenClass,
+      firstToken.tokenClass,
       tradeSecondQuote.outputAmount,
     );
 
@@ -285,10 +341,10 @@ export class TriangularArbitrageDetector {
     return {
       id: `tri-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       strategy: 'triangular',
-      entryTokenClass: galaToken.tokenClass,
-      entryTokenSymbol: galaToken.symbol,
-      exitTokenClass: galaToken.tokenClass,
-      exitTokenSymbol: galaToken.symbol,
+      entryTokenClass: firstToken.tokenClass,
+      entryTokenSymbol: firstToken.symbol,
+      exitTokenClass: firstToken.tokenClass,
+      exitTokenSymbol: firstToken.symbol,
       profitPercentage: tradeProfitPercentage,
       estimatedProfit: tradeProfitAmount,
       maxTradeAmount: amountToTrade,
@@ -301,28 +357,28 @@ export class TriangularArbitrageDetector {
       priceDiscrepancy,
       path: [
         {
-          fromSymbol: galaToken.symbol,
-          fromTokenClass: galaToken.tokenClass,
-          toSymbol: firstToken.symbol,
-          toTokenClass: firstToken.tokenClass,
+          fromSymbol: firstToken.symbol,
+          fromTokenClass: firstToken.tokenClass,
+          toSymbol: secondToken.symbol,
+          toTokenClass: secondToken.tokenClass,
           quote: tradeFirstQuote,
           inputAmount: tradeFirstQuote.inputAmount,
           outputAmount: tradeFirstQuote.outputAmount,
         },
         {
-          fromSymbol: firstToken.symbol,
-          fromTokenClass: firstToken.tokenClass,
-          toSymbol: secondToken.symbol,
-          toTokenClass: secondToken.tokenClass,
+          fromSymbol: secondToken.symbol,
+          fromTokenClass: secondToken.tokenClass,
+          toSymbol: thirdToken.symbol,
+          toTokenClass: thirdToken.tokenClass,
           quote: tradeSecondQuote,
           inputAmount: tradeSecondQuote.inputAmount,
           outputAmount: tradeSecondQuote.outputAmount,
         },
         {
-          fromSymbol: secondToken.symbol,
-          fromTokenClass: secondToken.tokenClass,
-          toSymbol: galaToken.symbol,
-          toTokenClass: galaToken.tokenClass,
+          fromSymbol: thirdToken.symbol,
+          fromTokenClass: thirdToken.tokenClass,
+          toSymbol: firstToken.symbol,
+          toTokenClass: firstToken.tokenClass,
           quote: tradeThirdQuote,
           inputAmount: tradeThirdQuote.inputAmount,
           outputAmount: tradeThirdQuote.outputAmount,

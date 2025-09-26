@@ -62,7 +62,7 @@ export const config: BotConfig = {
   // Constants
   minProfitThreshold: 0.3, // 0.5%
   maxTradeAmount: 3000,
-  pollingInterval: 10000, // 5 seconds
+  pollingInterval: 15000, // 5 seconds
   slippageTolerance: 5.0, // 5%
   balanceRefreshInterval: 0, // 0 = disabled
   maxConcurrentTrades: 3,

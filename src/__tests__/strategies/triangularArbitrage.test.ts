@@ -17,10 +17,14 @@ jest.mock('../../api/quotes', () => ({
 
 const GALA_CLASS = 'GALA|Unit|none|none';
 const GUSDC_CLASS = 'GUSDC|Unit|none|none';
-const GWETH_CLASS = 'GWETH|Unit|none|none';
+const GWBTC_CLASS = 'GWBTC|Unit|none|none';
 
 function createSnapshot(balance: number = 10_000): BalanceSnapshot {
-  const balances = new Map<string, number>([[GALA_CLASS, balance]]);
+  const balances = new Map<string, number>([
+    [GALA_CLASS, balance],
+    [GUSDC_CLASS, balance],
+    [GWBTC_CLASS, balance],
+  ]);
   return new RealBalanceSnapshot(balances, Date.now());
 }
 
@@ -35,10 +39,13 @@ describe('TriangularArbitrageDetector', () => {
     balanceSnapshot = createSnapshot();
 
     mockApi.getBalanceSnapshot.mockResolvedValue(balanceSnapshot);
-    mockApi.checkTradingFunds.mockResolvedValue({
-      hasFunds: true,
-      currentBalance: balanceSnapshot.getBalance(GALA_CLASS),
-      shortfall: 0,
+    mockApi.checkTradingFunds.mockImplementation(async (requiredAmount, tokenClass) => {
+      const currentBalance = balanceSnapshot.getBalance(tokenClass);
+      return {
+        hasFunds: currentBalance >= requiredAmount,
+        currentBalance,
+        shortfall: Math.max(0, requiredAmount - currentBalance),
+      };
     });
   });
 
@@ -49,34 +56,42 @@ describe('TriangularArbitrageDetector', () => {
   it('detects profitable triangular opportunities', async () => {
     const pairs: TradingPair[] = [
       createMockTradingPair('GALA', 'GUSDC'),
-      createMockTradingPair('GALA', 'GWETH'),
-      createMockTradingPair('GUSDC', 'GWETH'),
+      createMockTradingPair('GUSDC', 'GWBTC'),
+      createMockTradingPair('GALA', 'GWBTC'),
     ];
 
     const quoteMap: QuoteMap = new Map();
     const now = Date.now();
-    const setQuote = (input: string, output: string, amount: number, resultAmount: number) => {
-      const quote = createMockSwapQuote(amount, resultAmount, input, output);
+    const ratioMap = new Map<string, number>([
+      [`${GALA_CLASS}-${GUSDC_CLASS}`, 1.1],
+      [`${GUSDC_CLASS}-${GALA_CLASS}`, 0.95],
+      [`${GUSDC_CLASS}-${GWBTC_CLASS}`, 0.00005],
+      [`${GWBTC_CLASS}-${GUSDC_CLASS}`, 21000],
+      [`${GALA_CLASS}-${GWBTC_CLASS}`, 0.000048],
+      [`${GWBTC_CLASS}-${GALA_CLASS}`, 22000],
+    ]);
+
+    const setQuote = (input: string, output: string, amount: number) => {
+      const ratio = ratioMap.get(`${input}-${output}`);
+      if (ratio === undefined) {
+        return;
+      }
+      const quote = createMockSwapQuote(amount, amount * ratio, input, output);
       quoteMap.set(buildQuoteCacheKey(input, output, amount), { quote, timestamp: now });
     };
 
-    setQuote(GALA_CLASS, GUSDC_CLASS, 1, 1.1);
-    setQuote(GUSDC_CLASS, GWETH_CLASS, 1.1, 0.9);
-    setQuote(GWETH_CLASS, GALA_CLASS, 0.9, 1.05);
+    for (const key of ratioMap.keys()) {
+      const [input, output] = key.split('-');
+      setQuote(input, output, 1);
+    }
 
-    setQuote(GALA_CLASS, GWETH_CLASS, 1, 0.95);
-    setQuote(GWETH_CLASS, GUSDC_CLASS, 0.95, 1.05);
-    setQuote(GUSDC_CLASS, GALA_CLASS, 1.05, 1.1);
-
-    setQuote(GALA_CLASS, GUSDC_CLASS, 3000, 3300); // 10% profit
-    setQuote(GUSDC_CLASS, GWETH_CLASS, 3300, 2700); // 18.18% loss  
-    setQuote(GWETH_CLASS, GALA_CLASS, 2700, 3150); // 16.67% profit
-
-    setQuote(GALA_CLASS, GWETH_CLASS, 3000, 2850); // 5% loss
-    setQuote(GWETH_CLASS, GUSDC_CLASS, 2850, 3150); // 10.53% profit
-    setQuote(GUSDC_CLASS, GALA_CLASS, 3150, 3300); // 4.76% profit
-
-    mockApi.getQuote.mockImplementation(async () => null);
+    mockApi.getQuote.mockImplementation(async (inputToken, outputToken, amount) => {
+      const ratio = ratioMap.get(`${inputToken}-${outputToken}`);
+      if (ratio === undefined) {
+        return null;
+      }
+      return createMockSwapQuote(amount, amount * ratio, inputToken, outputToken);
+    });
 
     const opportunities = await detector.detectAllOpportunities(pairs, mockApi, quoteMap);
 
