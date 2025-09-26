@@ -33,8 +33,11 @@ class GalaTradingBot {
       validateConfig();
       console.log('✅ Configuration validated');
 
-      // Verify MongoDB connectivity when configured
-      await ensureMongoConnection();
+      // MongoDB connection is optional - don't fail if it can't connect
+      const mongoConnected = await ensureMongoConnection();
+      if (!mongoConnected) {
+        throw new Error('Unable to connect to MongoDB');
+      }
 
       // Test API connection
       await this.testApiConnection();
