@@ -164,12 +164,20 @@ describe('ArbitrageDetector', () => {
 
     const opportunities = await detector.detectAllOpportunities([DIRECT_PAIR], mockApi, new Map());
 
-    expect(opportunities).toHaveLength(1);
-    expect(opportunities[0].strategy).toBe('direct');
-    if (opportunities[0].strategy === 'direct') {
-      expect(opportunities[0].tokenClassA).toBe('GALA|Unit|none|none');
-      expect(opportunities[0].tokenClassB).toBe('GUSDC|Unit|none|none');
-    }
+    expect(opportunities).toHaveLength(2);
+    opportunities.forEach(opportunity => {
+      expect(opportunity.strategy).toBe('direct');
+    });
+
+    const forward = opportunities.find(
+      opportunity => opportunity.strategy === 'direct' && opportunity.tokenClassA === 'GALA|Unit|none|none'
+    );
+    const reverse = opportunities.find(
+      opportunity => opportunity.strategy === 'direct' && opportunity.tokenClassA === 'GUSDC|Unit|none|none'
+    );
+
+    expect(forward).toBeDefined();
+    expect(reverse).toBeDefined();
   });
 
   it('ignores pairs that are not supported', async () => {

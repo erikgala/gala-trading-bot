@@ -220,7 +220,7 @@ export class ArbitrageDetector {
         continue;
       }
 
-      const opportunity = await this.evaluateDirectArbitrage({
+      const forwardOpportunity = await this.evaluateDirectArbitrage({
         tokenA: pair.tokenA.symbol,
         tokenB: pair.tokenB.symbol,
         tokenClassA: pair.tokenClassA,
@@ -230,8 +230,22 @@ export class ArbitrageDetector {
         quoteMap,
       });
 
-      if (opportunity) {
-        opportunities.push(opportunity);
+      if (forwardOpportunity) {
+        opportunities.push(forwardOpportunity);
+      }
+
+      const reverseOpportunity = await this.evaluateDirectArbitrage({
+        tokenA: pair.tokenB.symbol,
+        tokenB: pair.tokenA.symbol,
+        tokenClassA: pair.tokenClassB,
+        tokenClassB: pair.tokenClassA,
+        api,
+        balanceSnapshot,
+        quoteMap,
+      });
+
+      if (reverseOpportunity) {
+        opportunities.push(reverseOpportunity);
       }
     }
 
