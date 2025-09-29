@@ -102,6 +102,48 @@ describe('TriangularArbitrageDetector', () => {
     expect(opportunity.profitPercentage).toBeGreaterThan(0);
   });
 
+  it('marks triangular opportunities as funded when wallet balance is below max trade amount', async () => {
+    balanceSnapshot = createSnapshot(100);
+    mockApi.getBalanceSnapshot.mockResolvedValue(balanceSnapshot);
+
+    const pairs: TradingPair[] = [
+      createMockTradingPair('GALA', 'GUSDC'),
+      createMockTradingPair('GUSDC', 'GWBTC'),
+      createMockTradingPair('GALA', 'GWBTC'),
+    ];
+
+    const ratioMap = new Map<string, number>([
+      [`${GALA_CLASS}-${GUSDC_CLASS}`, 1.1],
+      [`${GUSDC_CLASS}-${GALA_CLASS}`, 0.95],
+      [`${GUSDC_CLASS}-${GWBTC_CLASS}`, 0.00005],
+      [`${GWBTC_CLASS}-${GUSDC_CLASS}`, 21000],
+      [`${GALA_CLASS}-${GWBTC_CLASS}`, 0.000048],
+      [`${GWBTC_CLASS}-${GALA_CLASS}`, 22000],
+    ]);
+
+    mockApi.getQuote.mockImplementation(async (inputToken, outputToken, amount) => {
+      const ratio = ratioMap.get(`${inputToken}-${outputToken}`);
+      if (ratio === undefined) {
+        return null;
+      }
+      return createMockSwapQuote(amount, amount * ratio, inputToken, outputToken);
+    });
+
+    const opportunities = await detector.detectAllOpportunities(pairs, mockApi, new Map());
+
+    expect(opportunities.length).toBeGreaterThan(0);
+    const galaEntry = opportunities.find(
+      opportunity => opportunity.strategy === 'triangular' && opportunity.entryTokenClass === GALA_CLASS,
+    );
+
+    expect(galaEntry).toBeDefined();
+    if (galaEntry) {
+      expect(galaEntry.hasFunds).toBe(true);
+      expect(galaEntry.shortfall).toBe(0);
+      expect(galaEntry.maxTradeAmount).toBeCloseTo(balanceSnapshot.getBalance(GALA_CLASS) * 0.8);
+    }
+  });
+
   it('returns empty array when insufficient tokens available', async () => {
     const pairs: TradingPair[] = [createMockTradingPair('GALA', 'GUSDC')];
     const opportunities = await detector.detectAllOpportunities(pairs, mockApi, new Map());

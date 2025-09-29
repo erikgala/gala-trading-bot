@@ -111,12 +111,40 @@ describe('ArbitrageDetector', () => {
 
     const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
 
-    expect(opportunities).toHaveLength(1);
-    expect(opportunities[0].strategy).toBe('direct');
-    if (opportunities[0].strategy === 'direct') {
-      expect(opportunities[0].tokenA).toBe('GALA');
-      expect(opportunities[0].tokenB).toBe('GUSDC');
-      expect(opportunities[0].profitPercentage).toBeGreaterThan(0);
+    expect(opportunities).toHaveLength(2);
+    expect(opportunities.every(opp => opp.strategy === 'direct')).toBe(true);
+
+    const entrySymbols = opportunities.map(opp =>
+      opp.strategy === 'direct' ? opp.tokenA : opp.entryTokenSymbol,
+    );
+
+    expect(entrySymbols).toEqual(expect.arrayContaining(['GALA', 'GUSDC']));
+    opportunities.forEach(opportunity => {
+      expect(opportunity.profitPercentage).toBeGreaterThan(0);
+    });
+  });
+
+  it('marks direct opportunities as funded when wallet balance is below max trade amount', async () => {
+    balanceSnapshot = createMockBalanceSnapshot(100);
+    mockApi.getBalanceSnapshot.mockResolvedValue(balanceSnapshot);
+
+    const swapData = createMockSwapData();
+    mockDirectQuotes(mockApi);
+
+    const opportunities = await detector.detectOpportunitiesForSwap(swapData, 0.04, mockApi);
+
+    expect(opportunities.length).toBeGreaterThan(0);
+    const galaOpportunity = opportunities.find(
+      opportunity => opportunity.strategy === 'direct' && opportunity.tokenA === 'GALA',
+    );
+
+    expect(galaOpportunity).toBeDefined();
+    if (galaOpportunity && galaOpportunity.strategy === 'direct') {
+      expect(galaOpportunity.hasFunds).toBe(true);
+      const expectedTradeAmount = balanceSnapshot.getBalance('GALA|Unit|none|none') * 0.8;
+      expect(galaOpportunity.maxTradeAmount).toBeCloseTo(expectedTradeAmount);
+      expect(galaOpportunity.currentBalance).toBeCloseTo(balanceSnapshot.getBalance('GALA|Unit|none|none'));
+      expect(galaOpportunity.shortfall).toBe(0);
     }
   });
 

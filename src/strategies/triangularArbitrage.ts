@@ -287,6 +287,9 @@ export class TriangularArbitrageDetector {
       return null;
     }
 
+    const hasSufficientFunds = amountToTrade <= fundsCheck.currentBalance;
+    const shortfall = hasSufficientFunds ? 0 : Math.max(0, amountToTrade - fundsCheck.currentBalance);
+
     const tradeFirstQuote = await provider.getQuote(firstToken.tokenClass, secondToken.tokenClass, amountToTrade);
 
     if (!isValidQuote(tradeFirstQuote)) {
@@ -348,9 +351,9 @@ export class TriangularArbitrageDetector {
       profitPercentage: tradeProfitPercentage,
       estimatedProfit: tradeProfitAmount,
       maxTradeAmount: amountToTrade,
-      hasFunds: fundsCheck.hasFunds,
+      hasFunds: hasSufficientFunds,
       currentBalance: fundsCheck.currentBalance,
-      shortfall: fundsCheck.shortfall,
+      shortfall,
       timestamp: Date.now(),
       confidence: tradeProfitPercentage,
       currentMarketPrice,

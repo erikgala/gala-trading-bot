@@ -190,7 +190,9 @@ export class ArbitrageDetector {
     }
 
     const balanceSnapshot = await api.getBalanceSnapshot();
-    const opportunity = await this.evaluateDirectArbitrage({
+    const opportunities: ArbitrageOpportunity[] = [];
+
+    const forwardOpportunity = await this.evaluateDirectArbitrage({
       tokenA: swapData.tokenIn.collection,
       tokenB: swapData.tokenOut.collection,
       tokenClassA: tokenInClassKey,
@@ -200,7 +202,43 @@ export class ArbitrageDetector {
       currentPrice,
     });
 
-    return opportunity ? [opportunity] : [];
+    if (forwardOpportunity) {
+      opportunities.push(forwardOpportunity);
+    }
+
+    const reverseOpportunity = await this.evaluateDirectArbitrage({
+      tokenA: swapData.tokenOut.collection,
+      tokenB: swapData.tokenIn.collection,
+      tokenClassA: tokenOutClassKey,
+      tokenClassB: tokenInClassKey,
+      api,
+      balanceSnapshot,
+      currentPrice,
+    });
+
+    if (reverseOpportunity) {
+      opportunities.push(reverseOpportunity);
+    }
+
+    if (opportunities.length <= 1) {
+      return opportunities;
+    }
+
+    const primaryEntryClass = tokenInClassKey;
+    return opportunities.sort((a, b) => {
+      const profitDelta = (b.profitPercentage ?? 0) - (a.profitPercentage ?? 0);
+      if (Number.isFinite(profitDelta) && profitDelta !== 0) {
+        return profitDelta;
+      }
+
+      const aPrimary = a.entryTokenClass === primaryEntryClass ? 1 : 0;
+      const bPrimary = b.entryTokenClass === primaryEntryClass ? 1 : 0;
+      if (aPrimary !== bPrimary) {
+        return bPrimary - aPrimary;
+      }
+
+      return a.entryTokenClass.localeCompare(b.entryTokenClass);
+    });
   }
 
   async detectAllOpportunities(
@@ -265,6 +303,9 @@ export class ArbitrageDetector {
     const maxTradeAmount = config.maxTradeAmount;
     const fundsCheck = await api.checkTradingFunds(maxTradeAmount, tokenClassA, balanceSnapshot);
     const amountToTrade = Math.min(maxTradeAmount, fundsCheck.currentBalance * 0.8);
+
+    const hasSufficientFunds = amountToTrade > 0 && amountToTrade <= fundsCheck.currentBalance;
+    const shortfall = hasSufficientFunds ? 0 : Math.max(0, amountToTrade - fundsCheck.currentBalance);
 
     if (!Number.isFinite(amountToTrade) || amountToTrade <= 0) {
       return null;
@@ -336,9 +377,9 @@ export class ArbitrageDetector {
       maxTradeAmount: amountToTrade,
       quoteAToB: quoteAB,
       quoteBToA: quoteBA,
-      hasFunds: fundsCheck.hasFunds,
+      hasFunds: hasSufficientFunds,
       currentBalance: fundsCheck.currentBalance,
-      shortfall: fundsCheck.shortfall,
+      shortfall,
       timestamp: Date.now(),
       currentMarketPrice: marketPrice,
       priceDiscrepancy,
