@@ -60,9 +60,9 @@ export const config: BotConfig = {
   logLevel: (process.env.LOG_LEVEL as BotConfig['logLevel']) || 'info',
 
   // Constants
-  minProfitThreshold: 0.3, // 0.5%
-  maxTradeAmount: 3000,
-  pollingInterval: 15000, // 5 seconds
+  minProfitThreshold: 0.25, // 0.5%
+  maxTradeAmount: 10000,
+  pollingInterval: 10000, // 10 seconds
   slippageTolerance: 5.0, // 5%
   balanceRefreshInterval: 0, // 0 = disabled
   maxConcurrentTrades: 3,
