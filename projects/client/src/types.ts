@@ -59,6 +59,16 @@ export interface SocketUpdatePayload {
   summary: ProfitSummary;
 }
 
+export interface PaginatedTradesResponse {
+  trades: Trade[];
+  page: number;
+  pageSize: number;
+  totalTrades: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
 export type SocketMessage =
   | { type: 'init'; payload: SocketInitPayload }
   | { type: 'trade'; payload: SocketUpdatePayload }

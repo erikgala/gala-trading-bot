@@ -1,9 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ProfitSummary, SocketMessage, Trade } from './types';
+import type { PaginatedTradesResponse, ProfitSummary, SocketMessage, Trade } from './types';
 
 const API_BASE_URL = (import.meta.env.VITE_MONITORING_API_URL as string | undefined) ?? 'http://localhost:4400';
 const WEBSOCKET_URL = (import.meta.env.VITE_MONITORING_WS_URL as string | undefined) ?? 'ws://localhost:4400/ws/trades';
-const MAX_TRADES = Number(import.meta.env.VITE_MONITORING_MAX_TRADES ?? 100);
+const DEFAULT_PAGE_SIZE = 10;
+
+function toPositiveInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+const FALLBACK_PAGE_SIZE = toPositiveInteger(
+  Number(import.meta.env.VITE_MONITORING_MAX_TRADES ?? DEFAULT_PAGE_SIZE),
+  DEFAULT_PAGE_SIZE,
+);
+const PAGE_SIZE = toPositiveInteger(
+  Number(import.meta.env.VITE_MONITORING_PAGE_SIZE ?? FALLBACK_PAGE_SIZE),
+  FALLBACK_PAGE_SIZE,
+);
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'decimal',
@@ -26,6 +42,14 @@ const timeFormatter = new Intl.DateTimeFormat('en-US', {
 type ConnectionState = 'connecting' | 'online' | 'offline';
 
 type TradesUpdater = (trade: Trade) => void;
+
+interface PaginationState {
+  page: number;
+  totalTrades: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
 
 function formatCurrency(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -137,21 +161,63 @@ export default function App(): JSX.Element {
   const [summary, setSummary] = useState<ProfitSummary | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingTrades, setIsLoadingTrades] = useState(false);
+  const [pagination, setPagination] = useState<PaginationState>({
+    page: 1,
+    totalTrades: 0,
+    totalPages: 0,
+    hasNextPage: false,
+    hasPreviousPage: false,
+  });
+  const activeTradeRequests = useRef(0);
+  const currentPageRef = useRef(1);
+  const initialTradesAppliedRef = useRef(false);
 
-  const replaceTrades = useCallback((incoming: Trade[]) => {
-    setTrades(() => {
-      const unique = new Map<string, Trade>();
-      incoming.forEach(trade => unique.set(trade.executionId, trade));
-      return Array.from(unique.values()).slice(0, MAX_TRADES);
+  const applyTradesResponse = useCallback((payload: PaginatedTradesResponse) => {
+    setTrades(payload.trades);
+    setPagination({
+      page: payload.page,
+      totalTrades: payload.totalTrades,
+      totalPages: payload.totalPages,
+      hasNextPage: payload.hasNextPage,
+      hasPreviousPage: payload.hasPreviousPage,
     });
   }, []);
 
-  const upsertTrade = useCallback<TradesUpdater>(trade => {
-    setTrades(previous => {
-      const filtered = previous.filter(t => t.executionId !== trade.executionId);
-      return [trade, ...filtered].slice(0, MAX_TRADES);
-    });
+  const fetchTradesPage = useCallback(async (page: number): Promise<PaginatedTradesResponse> => {
+    activeTradeRequests.current += 1;
+    setIsLoadingTrades(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/trades?page=${page}&pageSize=${PAGE_SIZE}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch trades');
+      }
+
+      return (await response.json()) as PaginatedTradesResponse;
+    } finally {
+      activeTradeRequests.current = Math.max(activeTradeRequests.current - 1, 0);
+      if (activeTradeRequests.current === 0) {
+        setIsLoadingTrades(false);
+      }
+    }
   }, []);
+
+  const loadTradesPage = useCallback(
+    async (page: number, errorLabel: string) => {
+      try {
+        const payload = await fetchTradesPage(page);
+        applyTradesResponse(payload);
+        setErrorMessage(null);
+        return payload;
+      } catch (error) {
+        console.error(error);
+        setErrorMessage(errorLabel);
+        throw error;
+      }
+    },
+    [applyTradesResponse, fetchTradesPage],
+  );
 
   const setSummarySafe = useCallback((incoming: ProfitSummary) => {
     setSummary(prev => {
@@ -170,7 +236,63 @@ export default function App(): JSX.Element {
     setErrorMessage(message);
   }, []);
 
-  const { state: connectionState } = useWebSocket(replaceTrades, upsertTrade, setSummarySafe, handleError);
+  const fetchSummary = useCallback(async (): Promise<ProfitSummary> => {
+    const response = await fetch(`${API_BASE_URL}/api/summary`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch summary');
+    }
+
+    return (await response.json()) as ProfitSummary;
+  }, []);
+
+  const fetchFromRest = useCallback(
+    async (page: number) => {
+      try {
+        setIsRefreshing(true);
+        const [_, summaryPayload] = await Promise.all([
+          loadTradesPage(page, 'Unable to refresh trades from API'),
+          fetchSummary(),
+        ]);
+        setSummary(summaryPayload);
+        setErrorMessage(null);
+      } catch (error) {
+        console.error(error);
+        setErrorMessage('Unable to refresh data from API');
+      } finally {
+        setIsRefreshing(false);
+      }
+    },
+    [fetchSummary, loadTradesPage],
+  );
+
+  const handleInitialTrades = useCallback((incoming: Trade[]) => {
+    if (initialTradesAppliedRef.current || incoming.length === 0) {
+      return;
+    }
+
+    initialTradesAppliedRef.current = true;
+    setTrades(incoming.slice(0, PAGE_SIZE));
+    setPagination({
+      page: 1,
+      totalTrades: incoming.length,
+      totalPages: incoming.length > 0 ? Math.ceil(incoming.length / PAGE_SIZE) : 0,
+      hasNextPage: incoming.length > PAGE_SIZE,
+      hasPreviousPage: false,
+    });
+  }, []);
+
+  const handleTradeUpdate = useCallback<TradesUpdater>(
+    () => {
+      const pageToRefresh = currentPageRef.current;
+      void loadTradesPage(pageToRefresh, 'Unable to refresh trades after update').catch(() => undefined);
+    },
+    [loadTradesPage],
+  );
+
+  const { state: connectionState } = useWebSocket(handleInitialTrades, handleTradeUpdate, setSummarySafe, handleError);
+  useEffect(() => {
+    currentPageRef.current = pagination.page;
+  }, [pagination.page]);
 
   useEffect(() => {
     if (connectionState === 'online') {
@@ -178,38 +300,16 @@ export default function App(): JSX.Element {
     }
   }, [connectionState]);
 
-  const fetchFromRest = useCallback(async () => {
-    try {
-      setIsRefreshing(true);
-      const [tradesResponse, summaryResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/trades/recent?limit=${MAX_TRADES}`),
-        fetch(`${API_BASE_URL}/api/summary`),
-      ]);
-
-      if (tradesResponse.ok) {
-        const tradePayload = (await tradesResponse.json()) as Trade[];
-        replaceTrades(tradePayload);
-      } else {
-        throw new Error('Failed to fetch recent trades');
-      }
-
-      if (summaryResponse.ok) {
-        const summaryPayload = (await summaryResponse.json()) as ProfitSummary;
-        setSummary(summaryPayload);
-      }
-
-      setErrorMessage(null);
-    } catch (error) {
-      console.error(error);
-      setErrorMessage('Unable to refresh data from API');
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [replaceTrades]);
-
   useEffect(() => {
-    fetchFromRest().catch(error => console.error('Initial data fetch failed', error));
+    void fetchFromRest(1);
   }, [fetchFromRest]);
+
+  const handlePageChange = useCallback(
+    (nextPage: number) => {
+      void loadTradesPage(nextPage, 'Unable to load trades for the selected page').catch(() => undefined);
+    },
+    [loadTradesPage],
+  );
 
   const totals = useMemo(() => {
     if (!summary) {
@@ -238,6 +338,18 @@ export default function App(): JSX.Element {
     return connectionState === 'online' ? 'connection-dot online' : 'connection-dot';
   }, [connectionState]);
 
+  const paginationSummary = useMemo(() => {
+    if (pagination.totalTrades === 0 || trades.length === 0) {
+      return { start: 0, end: 0 };
+    }
+
+    const start = (pagination.page - 1) * PAGE_SIZE + 1;
+    const end = Math.min(start + trades.length - 1, pagination.totalTrades);
+    return { start, end };
+  }, [pagination.page, pagination.totalTrades, trades.length]);
+
+  const totalPagesDisplay = Math.max(1, pagination.totalPages || (pagination.totalTrades > 0 ? 1 : 0));
+
   return (
     <div className="layout">
       <header className="header">
@@ -250,7 +362,14 @@ export default function App(): JSX.Element {
         <div className="header-controls">
           <span className={connectionDotClass} aria-hidden="true" />
           <span className="connection-status">{statusLabel}</span>
-          <button className="refresh-button" type="button" disabled={isRefreshing} onClick={fetchFromRest}>
+          <button
+            className="refresh-button"
+            type="button"
+            disabled={isRefreshing}
+            onClick={() => {
+              void fetchFromRest(pagination.page);
+            }}
+          >
             {isRefreshing ? 'Refreshing…' : 'Manual Refresh'}
           </button>
         </div>
@@ -295,52 +414,90 @@ export default function App(): JSX.Element {
       <section className="trade-table-container">
         <h2>Recent Trades</h2>
         {trades.length === 0 ? (
-          <div className="empty-state">No trades recorded yet. Data will appear here once the bot executes.</div>
+          <div className="empty-state">
+            {isLoadingTrades ? 'Loading trades…' : 'No trades recorded yet. Data will appear here once the bot executes.'}
+          </div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Execution</th>
-                <th>Strategy</th>
-                <th>Status</th>
-                <th>Entry → Exit</th>
-                <th>Profit</th>
-                <th>P/L %</th>
-                <th>Buy Amount</th>
-                <th>Sell Output</th>
-                <th>Started</th>
-                <th>Completed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.map(trade => {
-                const profitClass = trade.profit.effective > 0 ? 'badge success' : trade.profit.effective < 0 ? 'badge error' : 'badge';
-                const statusClass =
-                  trade.status === 'completed' ? 'badge success' : trade.status === 'failed' ? 'badge error' : 'badge warning';
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>Execution</th>
+                  <th>Strategy</th>
+                  <th>Status</th>
+                  <th>Entry → Exit</th>
+                  <th>Profit</th>
+                  <th>P/L %</th>
+                  <th>Buy Amount</th>
+                  <th>Sell Output</th>
+                  <th>Started</th>
+                  <th>Completed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trades.map(trade => {
+                  const profitClass =
+                    trade.profit.effective > 0 ? 'badge success' : trade.profit.effective < 0 ? 'badge error' : 'badge';
+                  const statusClass =
+                    trade.status === 'completed'
+                      ? 'badge success'
+                      : trade.status === 'failed'
+                        ? 'badge error'
+                        : 'badge warning';
 
-                return (
-                  <tr key={trade.executionId}>
-                    <td style={{ fontFamily: 'monospace' }}>{trade.executionId.slice(0, 8)}</td>
-                    <td>{trade.strategy}</td>
-                    <td>
-                      <span className={statusClass}>{trade.status}</span>
-                    </td>
-                    <td>
-                      {trade.entryToken.symbol} → {trade.exitToken.symbol}
-                    </td>
-                    <td>
-                      <span className={profitClass}>{formatCurrency(trade.profit.effective)}</span>
-                    </td>
-                    <td>{formatPercentage(trade.profit.percentage)}</td>
-                    <td>{formatCurrency(trade.amount.buyInput)}</td>
-                    <td>{formatCurrency(trade.amount.sellOutput)}</td>
-                    <td>{formatDate(trade.startTime)}</td>
-                    <td>{formatDate(trade.endTime)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  return (
+                    <tr key={trade.executionId}>
+                      <td style={{ fontFamily: 'monospace' }}>{trade.executionId.slice(0, 8)}</td>
+                      <td>{trade.strategy}</td>
+                      <td>
+                        <span className={statusClass}>{trade.status}</span>
+                      </td>
+                      <td>
+                        {trade.entryToken.symbol} → {trade.exitToken.symbol}
+                      </td>
+                      <td>
+                        <span className={profitClass}>{formatCurrency(trade.profit.effective)}</span>
+                      </td>
+                      <td>{formatPercentage(trade.profit.percentage)}</td>
+                      <td>{formatCurrency(trade.amount.buyInput)}</td>
+                      <td>{formatCurrency(trade.amount.sellOutput)}</td>
+                      <td>{formatDate(trade.startTime)}</td>
+                      <td>{formatDate(trade.endTime)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {pagination.totalTrades > 0 && (
+              <div className="table-footer">
+                <span>
+                  Showing {paginationSummary.start}-{paginationSummary.end} of {pagination.totalTrades}
+                </span>
+                <div className="pagination-controls">
+                  <button
+                    type="button"
+                    className="pagination-button"
+                    onClick={() => handlePageChange(pagination.page - 1)}
+                    disabled={!pagination.hasPreviousPage || isLoadingTrades}
+                  >
+                    Previous
+                  </button>
+                  <span>
+                    Page {pagination.page} of {totalPagesDisplay}
+                  </span>
+                  <button
+                    type="button"
+                    className="pagination-button"
+                    onClick={() => handlePageChange(pagination.page + 1)}
+                    disabled={!pagination.hasNextPage || isLoadingTrades}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </section>
     </div>

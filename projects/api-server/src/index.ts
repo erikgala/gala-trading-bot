@@ -86,6 +86,16 @@ interface ProfitSummary {
   lastUpdated: string;
 }
 
+interface PaginatedTradesResult {
+  trades: PublicTradePayload[];
+  page: number;
+  pageSize: number;
+  totalTrades: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
 interface BroadcastMessage {
   type: 'init' | 'trade' | 'summary' | 'error';
   payload: unknown;
@@ -118,7 +128,18 @@ loadEnvironment();
 
 const PORT = parseInt(process.env.MONITORING_API_PORT ?? '4400', 10);
 const WS_PATH = process.env.MONITORING_WS_PATH ?? '/ws/trades';
-const RECENT_LIMIT = parseInt(process.env.MONITORING_RECENT_LIMIT ?? '50', 10);
+const MAX_PAGE_SIZE = Math.max(parseInt(process.env.MONITORING_MAX_PAGE_SIZE ?? '250', 10), 1);
+
+function normalizePageSize(value: number, fallback: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return Math.min(Math.max(fallback, 1), MAX_PAGE_SIZE);
+  }
+
+  return Math.min(Math.floor(value), MAX_PAGE_SIZE);
+}
+
+const DEFAULT_PAGE_SIZE = normalizePageSize(parseInt(process.env.MONITORING_PAGE_SIZE ?? '25', 10), 25);
+const RECENT_LIMIT = normalizePageSize(parseInt(process.env.MONITORING_RECENT_LIMIT ?? '50', 10), 50);
 const MONGO_URI = process.env.MONGO_URI ?? '';
 const MONGO_DB_NAME = process.env.MONGO_DB_NAME ?? 'trading-bot';
 const MONGO_TRADES_COLLECTION = process.env.MONGO_TRADES_COLLECTION ?? 'tradeExecutions';
@@ -250,6 +271,39 @@ async function convertTradesToUsd(trades: PublicTradePayload[]): Promise<PublicT
   return Promise.all(trades.map(trade => convertProfitToUsd(trade)));
 }
 
+async function fetchTradesPaginated(page: number, pageSize: number): Promise<PaginatedTradesResult> {
+  const collection = tradeCollection;
+  if (!collection) {
+    throw new Error('MongoDB not initialised');
+  }
+
+  const sanitizedPageSize = normalizePageSize(pageSize, DEFAULT_PAGE_SIZE);
+  const rawPage = Number.isFinite(page) ? Math.floor(page) : 1;
+  const sanitizedPage = rawPage > 0 ? rawPage : 1;
+
+  const totalTrades = await collection.countDocuments();
+  const totalPages = totalTrades === 0 ? 0 : Math.ceil(totalTrades / sanitizedPageSize);
+  const effectivePage = totalPages === 0 ? 1 : Math.min(sanitizedPage, totalPages);
+  const skip = (effectivePage - 1) * sanitizedPageSize;
+
+  const cursor = collection
+    .find({}, { sort: { startTime: -1 }, skip, limit: sanitizedPageSize })
+    .map(mapTrade);
+
+  const trades = await cursor.toArray();
+  const tradesWithUsd = await convertTradesToUsd(trades);
+
+  return {
+    trades: tradesWithUsd,
+    page: totalPages === 0 ? 1 : effectivePage,
+    pageSize: sanitizedPageSize,
+    totalTrades,
+    totalPages,
+    hasNextPage: totalPages > 0 && effectivePage < totalPages,
+    hasPreviousPage: totalPages > 0 && effectivePage > 1,
+  };
+}
+
 async function computeSummary(): Promise<ProfitSummary> {
   if (!tradeCollection) {
     throw new Error('MongoDB not initialised');
@@ -353,16 +407,8 @@ async function computeSummary(): Promise<ProfitSummary> {
 }
 
 async function fetchRecentTrades(limit = RECENT_LIMIT): Promise<PublicTradePayload[]> {
-  if (!tradeCollection) {
-    throw new Error('MongoDB not initialised');
-  }
-
-  const cursor = tradeCollection
-    .find({}, { sort: { startTime: -1 }, limit })
-    .map(mapTrade);
-
-  const trades = await cursor.toArray();
-  return convertTradesToUsd(trades);
+  const paginated = await fetchTradesPaginated(1, limit);
+  return paginated.trades;
 }
 
 function broadcast(message: BroadcastMessage): void {
@@ -467,11 +513,30 @@ app.get('/api/trades/recent', async (req: Request, res: Response) => {
   const limit = typeof limitParam === 'string' ? parseInt(limitParam, 10) : RECENT_LIMIT;
 
   try {
-    const trades = await fetchRecentTrades(Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 250) : RECENT_LIMIT);
+    const trades = await fetchRecentTrades(normalizePageSize(limit, RECENT_LIMIT));
     res.json(trades);
   } catch (error) {
     logger.error('Failed to fetch recent trades', error);
     res.status(500).json({ error: 'Failed to fetch recent trades' });
+  }
+});
+
+app.get('/api/trades', async (req: Request, res: Response) => {
+  if (!tradeCollection) {
+    res.status(503).json({ error: 'MongoDB not configured' });
+    return;
+  }
+
+  const pageParam = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : 1;
+  const pageSizeParam =
+    typeof req.query.pageSize === 'string' ? parseInt(req.query.pageSize, 10) : DEFAULT_PAGE_SIZE;
+
+  try {
+    const result = await fetchTradesPaginated(pageParam, pageSizeParam);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to fetch paginated trades', error);
+    res.status(500).json({ error: 'Failed to fetch trades' });
   }
 });
 
