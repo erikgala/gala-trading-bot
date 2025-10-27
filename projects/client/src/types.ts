@@ -69,6 +69,22 @@ export interface PaginatedTradesResponse {
   hasPreviousPage: boolean;
 }
 
+export interface WalletBalance {
+  symbol: string;
+  tokenClass: string;
+  balance: number;
+  usdPrice: number | null;
+  usdValue: number | null;
+}
+
+export interface WalletBalancesResponse {
+  balances: WalletBalance[];
+  totalUsdValue: number;
+  lastUpdated: string;
+  isStale: boolean;
+  warning: string | null;
+}
+
 export type SocketMessage =
   | { type: 'init'; payload: SocketInitPayload }
   | { type: 'trade'; payload: SocketUpdatePayload }

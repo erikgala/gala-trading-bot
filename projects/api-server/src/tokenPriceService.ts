@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'timers/promises';
 
-type SupportedSymbol = 'GALA' | 'GUSDC' | 'GUSDT' | 'GWETH' | 'GWBTC';
+type SupportedSymbol = 'GALA' | 'GUSDC' | 'GUSDT' | 'GWETH' | 'GWBTC' | 'GSOL';
 
 interface TokenPriceConfig {
   coingeckoId: string;
@@ -13,6 +13,7 @@ const TOKEN_PRICE_CONFIG: Record<SupportedSymbol, TokenPriceConfig> = {
   GUSDT: { coingeckoId: 'tether', fallbackUsd: 1 },
   GWETH: { coingeckoId: 'ethereum' },
   GWBTC: { coingeckoId: 'bitcoin' },
+  GSOL: { coingeckoId: 'solana' },
 };
 
 type PriceEntry = {
@@ -92,6 +93,7 @@ export class TokenPriceService {
       GUSDT: null,
       GWETH: null,
       GWBTC: null,
+      GSOL: null,
     };
 
     (Object.keys(TOKEN_PRICE_CONFIG) as SupportedSymbol[]).forEach(symbol => {

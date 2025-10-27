@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PaginatedTradesResponse, ProfitSummary, SocketMessage, Trade } from './types';
+import type {
+  PaginatedTradesResponse,
+  ProfitSummary,
+  SocketMessage,
+  Trade,
+  WalletBalancesResponse,
+} from './types';
 
 const API_BASE_URL = (import.meta.env.VITE_MONITORING_API_URL as string | undefined) ?? 'http://localhost:4400';
 const WEBSOCKET_URL = (import.meta.env.VITE_MONITORING_WS_URL as string | undefined) ?? 'ws://localhost:4400/ws/trades';
@@ -51,6 +57,11 @@ interface PaginationState {
   hasPreviousPage: boolean;
 }
 
+interface FetchWalletOptions {
+  suppressError?: boolean;
+  force?: boolean;
+}
+
 function formatCurrency(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '—';
@@ -63,6 +74,17 @@ function formatPercentage(value: number | null | undefined): string {
     return '—';
   }
   return percentageFormatter.format(value / 100);
+}
+
+function formatTokenAmount(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '0';
+  }
+
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 6,
+  });
 }
 
 function formatDate(value: string | null): string {
@@ -162,6 +184,9 @@ export default function App(): JSX.Element {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingTrades, setIsLoadingTrades] = useState(false);
+  const [walletOverview, setWalletOverview] = useState<WalletBalancesResponse | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [isLoadingWallet, setIsLoadingWallet] = useState(false);
   const [pagination, setPagination] = useState<PaginationState>({
     page: 1,
     totalTrades: 0,
@@ -170,6 +195,7 @@ export default function App(): JSX.Element {
     hasPreviousPage: false,
   });
   const activeTradeRequests = useRef(0);
+  const walletRequestCountRef = useRef(0);
   const currentPageRef = useRef(1);
   const initialTradesAppliedRef = useRef(false);
 
@@ -202,6 +228,40 @@ export default function App(): JSX.Element {
       }
     }
   }, []);
+
+  const fetchWalletBalances = useCallback(
+    async (options: FetchWalletOptions = {}): Promise<WalletBalancesResponse | null> => {
+      walletRequestCountRef.current += 1;
+      if (walletRequestCountRef.current === 1) {
+        setIsLoadingWallet(true);
+      }
+
+      try {
+        const forceQuery = options.force ? '?force=true' : '';
+        const response = await fetch(`${API_BASE_URL}/api/wallet/balances${forceQuery}`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch wallet balances');
+        }
+
+        const payload = (await response.json()) as WalletBalancesResponse;
+        setWalletOverview(payload);
+        setWalletError(null);
+        return payload;
+      } catch (error) {
+        console.error(error);
+        if (!options.suppressError) {
+          setWalletError('Unable to load wallet balances');
+        }
+        return null;
+      } finally {
+        walletRequestCountRef.current = Math.max(walletRequestCountRef.current - 1, 0);
+        if (walletRequestCountRef.current === 0) {
+          setIsLoadingWallet(false);
+        }
+      }
+    },
+    [],
+  );
 
   const loadTradesPage = useCallback(
     async (page: number, errorLabel: string) => {
@@ -247,8 +307,10 @@ export default function App(): JSX.Element {
 
   const fetchFromRest = useCallback(
     async (page: number) => {
+      setIsRefreshing(true);
+      const walletPromise = fetchWalletBalances({ suppressError: false, force: true });
+
       try {
-        setIsRefreshing(true);
         const [_, summaryPayload] = await Promise.all([
           loadTradesPage(page, 'Unable to refresh trades from API'),
           fetchSummary(),
@@ -259,10 +321,11 @@ export default function App(): JSX.Element {
         console.error(error);
         setErrorMessage('Unable to refresh data from API');
       } finally {
+        await walletPromise;
         setIsRefreshing(false);
       }
     },
-    [fetchSummary, loadTradesPage],
+    [fetchSummary, fetchWalletBalances, loadTradesPage],
   );
 
   const handleInitialTrades = useCallback((incoming: Trade[]) => {
@@ -285,8 +348,9 @@ export default function App(): JSX.Element {
     () => {
       const pageToRefresh = currentPageRef.current;
       void loadTradesPage(pageToRefresh, 'Unable to refresh trades after update').catch(() => undefined);
+      void fetchWalletBalances({ suppressError: true, force: true });
     },
-    [loadTradesPage],
+    [fetchWalletBalances, loadTradesPage],
   );
 
   const { state: connectionState } = useWebSocket(handleInitialTrades, handleTradeUpdate, setSummarySafe, handleError);
@@ -310,6 +374,21 @@ export default function App(): JSX.Element {
     },
     [loadTradesPage],
   );
+
+  const walletSummary = useMemo(() => {
+    if (!walletOverview) {
+      return null;
+    }
+
+    return {
+      totalUsd: formatCurrency(walletOverview.totalUsdValue),
+      lastUpdated: formatDate(walletOverview.lastUpdated),
+      isStale: walletOverview.isStale,
+      warning: walletOverview.warning,
+    };
+  }, [walletOverview]);
+
+  const walletRows = walletOverview?.balances ?? [];
 
   const totals = useMemo(() => {
     if (!summary) {
@@ -410,6 +489,62 @@ export default function App(): JSX.Element {
           </div>
         </section>
       )}
+
+      <section className="wallet-section">
+        <div className="wallet-header">
+          <h2>Wallet Balances</h2>
+          <div className="wallet-header-meta">
+            {walletSummary && (
+              <>
+                <span className="wallet-total">
+                  Total USD Value: <strong>{walletSummary.totalUsd}</strong>
+                </span>
+                <span className="wallet-updated">Updated {walletSummary.lastUpdated}</span>
+                {walletSummary.isStale && <span className="wallet-status warning">Showing cached data</span>}
+              </>
+            )}
+            {isLoadingWallet && <span className="wallet-status">Updating…</span>}
+          </div>
+        </div>
+
+        {walletError && (
+          <div className="badge error" role="alert">
+            {walletError}
+          </div>
+        )}
+        {!walletError && walletSummary?.warning && (
+          <div className="badge warning" role="status">
+            {walletSummary.warning}
+          </div>
+        )}
+
+        {walletRows.length === 0 ? (
+          <div className="empty-state">
+            {isLoadingWallet ? 'Loading balances…' : 'No tracked token balances found.'}
+          </div>
+        ) : (
+          <table className="wallet-table">
+            <thead>
+              <tr>
+                <th>Token</th>
+                <th>Balance</th>
+                <th>USD Price</th>
+                <th>USD Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {walletRows.map(row => (
+                <tr key={row.symbol}>
+                  <td>{row.symbol}</td>
+                  <td>{formatTokenAmount(row.balance)}</td>
+                  <td>{formatCurrency(row.usdPrice)}</td>
+                  <td>{formatCurrency(row.usdValue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
 
       <section className="trade-table-container">
         <h2>Recent Trades</h2>

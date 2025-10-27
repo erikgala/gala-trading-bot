@@ -125,6 +125,65 @@ tr:nth-child(even) {
   color: var(--text-muted);
 }
 
+.wallet-section {
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.wallet-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.wallet-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.wallet-total strong {
+  color: var(--text);
+}
+
+.wallet-updated {
+  font-size: 0.8rem;
+}
+
+.wallet-status {
+  font-size: 0.8rem;
+  color: var(--primary);
+}
+
+.wallet-status.warning {
+  color: #facc15;
+}
+
+.wallet-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.wallet-table th,
+.wallet-table td {
+  text-align: left;
+}
+
+.wallet-table th:nth-child(n + 2),
+.wallet-table td:nth-child(n + 2) {
+  text-align: right;
+}
+
 .layout {
   max-width: 1200px;
   margin: 0 auto;

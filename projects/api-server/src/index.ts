@@ -17,6 +17,7 @@ import {
 import { WebSocketServer, WebSocket } from 'ws';
 
 import { TokenPriceService } from './tokenPriceService';
+import { WalletBalanceService, type TrackedToken } from './walletBalanceService';
 
 interface TradeDocument {
   executionId: string;
@@ -129,6 +130,16 @@ loadEnvironment();
 const PORT = parseInt(process.env.MONITORING_API_PORT ?? '4400', 10);
 const WS_PATH = process.env.MONITORING_WS_PATH ?? '/ws/trades';
 const MAX_PAGE_SIZE = Math.max(parseInt(process.env.MONITORING_MAX_PAGE_SIZE ?? '250', 10), 1);
+const DEFAULT_TRACKED_SYMBOLS = 'GALA,GUSDC,GUSDT,GWETH,GWBTC,GSOL';
+const DEFAULT_GALASWAP_API_URL = 'https://dex-backend-prod1.defi.gala.com';
+
+function parseInteger(value: string | undefined, fallback: number): number {
+  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+  if (Number.isFinite(parsed)) {
+    return parsed;
+  }
+  return fallback;
+}
 
 function normalizePageSize(value: number, fallback: number): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -140,9 +151,58 @@ function normalizePageSize(value: number, fallback: number): number {
 
 const DEFAULT_PAGE_SIZE = normalizePageSize(parseInt(process.env.MONITORING_PAGE_SIZE ?? '25', 10), 25);
 const RECENT_LIMIT = normalizePageSize(parseInt(process.env.MONITORING_RECENT_LIMIT ?? '50', 10), 50);
+const BALANCE_REFRESH_INTERVAL = Math.max(
+  0,
+  parseInteger(process.env.MONITORING_BALANCE_REFRESH_MS, 30_000),
+);
 const MONGO_URI = process.env.MONGO_URI ?? '';
 const MONGO_DB_NAME = process.env.MONGO_DB_NAME ?? 'trading-bot';
 const MONGO_TRADES_COLLECTION = process.env.MONGO_TRADES_COLLECTION ?? 'tradeExecutions';
+const WALLET_ADDRESS = process.env.WALLET_ADDRESS ?? '';
+const PRIVATE_KEY = process.env.PRIVATE_KEY ?? '';
+const MOCK_MODE = process.env.MOCK_MODE === 'true';
+const GALASWAP_API_URL = process.env.GALASWAP_API_URL ?? DEFAULT_GALASWAP_API_URL;
+const GALACHAIN_GATEWAY_URL = process.env.GALACHAIN_GATEWAY_URL;
+const GALASWAP_DEX_CONTRACT_PATH = process.env.GALASWAP_DEX_CONTRACT_PATH;
+const GALASWAP_TOKEN_CONTRACT_PATH = process.env.GALASWAP_TOKEN_CONTRACT_PATH;
+const GALASWAP_BUNDLER_URL = process.env.GALASWAP_BUNDLER_URL;
+const GALASWAP_BUNDLER_PATH = process.env.GALASWAP_BUNDLER_PATH;
+const GALASWAP_TX_TIMEOUT_MS = parseInteger(process.env.GALASWAP_TX_TIMEOUT_MS, 300_000);
+
+function parseMockWalletBalances(raw: string | undefined): Record<string, number> {
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, number>;
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+  } catch {
+    // Ignore parse errors and fall through to empty result.
+  }
+
+  return {};
+}
+
+function parseTrackedTokens(raw: string | undefined): TrackedToken[] {
+  const source = raw && raw.trim().length > 0 ? raw : DEFAULT_TRACKED_SYMBOLS;
+  const symbols = source
+    .split(',')
+    .map(symbol => symbol.trim().toUpperCase())
+    .filter(symbol => symbol.length > 0);
+
+  const uniqueSymbols = Array.from(new Set(symbols));
+
+  return uniqueSymbols.map(symbol => ({
+    symbol,
+    tokenClass: `${symbol}|Unit|none|none`,
+  }));
+}
+
+const MOCK_WALLET_BALANCES = parseMockWalletBalances(process.env.MOCK_WALLET_BALANCES);
+const TRACKED_TOKENS = parseTrackedTokens(process.env.MONITORING_TRACKED_TOKENS);
 
 if (!MONGO_URI) {
   logger.warn('MONGO_URI is not set. API server will start without database connectivity.');
@@ -156,6 +216,25 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: WS_PATH });
 const clients = new Set<WebSocket>();
 const priceService = new TokenPriceService();
+const walletBalanceService = new WalletBalanceService({
+  walletAddress: WALLET_ADDRESS,
+  privateKey: PRIVATE_KEY,
+  mockMode: MOCK_MODE,
+  mockWalletBalances: MOCK_WALLET_BALANCES,
+  trackedTokens: TRACKED_TOKENS,
+  refreshIntervalMs: BALANCE_REFRESH_INTERVAL,
+  priceService,
+  gSwapOptions: {
+    walletAddress: WALLET_ADDRESS || undefined,
+    dexBackendBaseUrl: GALASWAP_API_URL,
+    gatewayBaseUrl: GALACHAIN_GATEWAY_URL || undefined,
+    dexContractBasePath: GALASWAP_DEX_CONTRACT_PATH || undefined,
+    tokenContractBasePath: GALASWAP_TOKEN_CONTRACT_PATH || undefined,
+    bundlerBaseUrl: GALASWAP_BUNDLER_URL || undefined,
+    bundlingAPIBasePath: GALASWAP_BUNDLER_PATH || undefined,
+    transactionWaitTimeoutMs: GALASWAP_TX_TIMEOUT_MS,
+  },
+});
 
 let mongoClient: MongoClient | null = null;
 let tradeCollection: Collection<TradeDocument> | null = null;
@@ -500,6 +579,23 @@ app.get('/api/summary', async (_req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to compute summary', error);
     res.status(500).json({ error: 'Failed to compute summary' });
+  }
+});
+
+app.get('/api/wallet/balances', async (req: Request, res: Response) => {
+  if (!walletBalanceService.canProvideBalances()) {
+    res.status(503).json({ error: 'Wallet balances are unavailable' });
+    return;
+  }
+
+  const forceRefresh = typeof req.query.force === 'string' && req.query.force.toLowerCase() === 'true';
+
+  try {
+    const overview = await walletBalanceService.getOverview(forceRefresh);
+    res.json(overview);
+  } catch (error) {
+    logger.error('Failed to fetch wallet balances', error);
+    res.status(500).json({ error: 'Failed to fetch wallet balances' });
   }
 });
 
