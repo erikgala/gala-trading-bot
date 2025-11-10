@@ -150,7 +150,7 @@ function normalizePageSize(value: number, fallback: number): number {
 }
 
 const DEFAULT_PAGE_SIZE = normalizePageSize(parseInt(process.env.MONITORING_PAGE_SIZE ?? '25', 10), 25);
-const RECENT_LIMIT = normalizePageSize(parseInt(process.env.MONITORING_RECENT_LIMIT ?? '50', 10), 50);
+const RECENT_LIMIT = normalizePageSize(parseInt(process.env.MONITORING_RECENT_LIMIT ?? '20', 10), 50);
 const BALANCE_REFRESH_INTERVAL = Math.max(
   0,
   parseInteger(process.env.MONITORING_BALANCE_REFRESH_MS, 30_000),
