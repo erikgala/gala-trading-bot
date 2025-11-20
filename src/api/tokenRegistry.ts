@@ -11,7 +11,8 @@ const FALLBACK_TOKENS: TokenInfo[] = [
   { symbol: 'GUSDT', name: 'Gala Tether', decimals: 6, tokenClass: 'GUSDT|Unit|none|none', price: 0, priceChange24h: 0 },
   { symbol: 'GWETH', name: 'Gala Wrapped Ethereum', decimals: 18, tokenClass: 'GWETH|Unit|none|none', price: 0, priceChange24h: 0 },
   { symbol: 'GWBTC', name: 'Gala Wrapped Bitcoin', decimals: 8, tokenClass: 'GWBTC|Unit|none|none', price: 0, priceChange24h: 0 },
-  { symbol: 'GSOL', name: 'Gala Wrapped Solana', decimals: 9, tokenClass: 'GSOL|Unit|none|none', price: 0, priceChange24h: 0 }
+  { symbol: 'GSOL', name: 'Gala Wrapped Solana', decimals: 9, tokenClass: 'GSOL|Unit|none|none', price: 0, priceChange24h: 0 },
+  { symbol: 'BENE', name: 'Benefactor', decimals: 9, tokenClass: 'Token|Unit|BENE|client:5c806869e7fd0e2384461ce9', price: 0, priceChange24h: 0 }
 ];
 
 export interface TokenRegistryOptions {

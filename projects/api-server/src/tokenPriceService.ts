@@ -1,9 +1,10 @@
 import { setTimeout as delay } from 'timers/promises';
 
-type SupportedSymbol = 'GALA' | 'GUSDC' | 'GUSDT' | 'GWETH' | 'GWBTC' | 'GSOL';
+type SupportedSymbol = 'GALA' | 'GUSDC' | 'GUSDT' | 'GWETH' | 'GWBTC' | 'GSOL' | 'BENE';
 
 interface TokenPriceConfig {
-  coingeckoId: string;
+  coingeckoId?: string;
+  galaSwapId?: string;
   fallbackUsd?: number;
 }
 
@@ -14,6 +15,7 @@ const TOKEN_PRICE_CONFIG: Record<SupportedSymbol, TokenPriceConfig> = {
   GWETH: { coingeckoId: 'ethereum' },
   GWBTC: { coingeckoId: 'bitcoin' },
   GSOL: { coingeckoId: 'solana' },
+  BENE: { galaSwapId: 'Token$Unit$BENE$client:5c806869e7fd0e2384461ce9' },
 };
 
 type PriceEntry = {
@@ -94,6 +96,7 @@ export class TokenPriceService {
       GWETH: null,
       GWBTC: null,
       GSOL: null,
+      BENE: null,
     };
 
     (Object.keys(TOKEN_PRICE_CONFIG) as SupportedSymbol[]).forEach(symbol => {
@@ -145,8 +148,10 @@ export class TokenPriceService {
   }
 
   private async fetchAllPrices(): Promise<void> {
+
+    // CoinGecko
     const ids = Array.from(new Set(
-      (Object.values(TOKEN_PRICE_CONFIG) as Array<{ coingeckoId: string }>).map(config => config.coingeckoId),
+      (Object.values(TOKEN_PRICE_CONFIG) as Array<{ coingeckoId: string }>).filter(config => config.coingeckoId).map(config => config.coingeckoId),
     ));
 
     const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd`;
@@ -165,7 +170,7 @@ export class TokenPriceService {
         const now = Date.now();
         (Object.keys(TOKEN_PRICE_CONFIG) as SupportedSymbol[]).forEach(symbol => {
           const config = TOKEN_PRICE_CONFIG[symbol];
-          const priceEntry = data[config.coingeckoId];
+          const priceEntry = data[config.coingeckoId!];
 
           if (priceEntry && Number.isFinite(priceEntry.usd) && priceEntry.usd > 0) {
             this.cache.set(symbol, {
@@ -176,7 +181,6 @@ export class TokenPriceService {
         });
 
         this.lastFetchError = null;
-        return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Failed to fetch token prices');
         if (attempt < this.maxRetries) {
@@ -185,7 +189,16 @@ export class TokenPriceService {
       }
     }
 
+    // GalaSwap
+    await Promise.all(Object.entries(TOKEN_PRICE_CONFIG).filter(([_, config]) => config.galaSwapId).map(([symbol, config]) => this.fetchGalaSwapPrice(symbol as SupportedSymbol, config.galaSwapId!)));
+
     this.lastFetchError = lastError;
+  }
+
+  private async fetchGalaSwapPrice(symbol: SupportedSymbol, galaSwapId: string): Promise<void> {
+    const url = `https://dex-backend-prod1.defi.gala.com/v1/trade/price?token=${galaSwapId}`;
+    const data = await this.fetchJson<{ data: string }>(url);
+    this.cache.set(symbol, { usd: parseFloat(data.data), fetchedAt: Date.now() });
   }
 }
 

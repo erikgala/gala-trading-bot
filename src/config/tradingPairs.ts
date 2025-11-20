@@ -14,6 +14,8 @@ const SUPPORTED_SYMBOL_PAIRS: SymbolPair[] = [
   ['GUSDT', 'GWBTC'],
   ['GALA', 'GWBTC'],
   ['GALA', 'GSOL'],
+  ['GALA', 'BENE'],
+  ['GWBTC','GWETH']
 ];
 
 const SUPPORTED_TOKEN_CLASS_PAIRS: ClassPair[] = SUPPORTED_SYMBOL_PAIRS.map(([a, b]) => [

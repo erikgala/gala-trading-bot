@@ -130,7 +130,7 @@ loadEnvironment();
 const PORT = parseInt(process.env.MONITORING_API_PORT ?? '4400', 10);
 const WS_PATH = process.env.MONITORING_WS_PATH ?? '/ws/trades';
 const MAX_PAGE_SIZE = Math.max(parseInt(process.env.MONITORING_MAX_PAGE_SIZE ?? '250', 10), 1);
-const DEFAULT_TRACKED_SYMBOLS = 'GALA,GUSDC,GUSDT,GWETH,GWBTC,GSOL';
+const DEFAULT_TRACKED_SYMBOLS = 'GALA,GUSDC,GUSDT,GWETH,GWBTC,GSOL,BENE';
 const DEFAULT_GALASWAP_API_URL = 'https://dex-backend-prod1.defi.gala.com';
 
 function parseInteger(value: string | undefined, fallback: number): number {
