@@ -72,18 +72,21 @@ export class GSwapAPI {
   async getTradingPairs(): Promise<TradingPair[]> {
     try {
       const tokens = await this.getAvailableTokens();
-      const tokensByClass = new Map(tokens.map(token => [token.tokenClass, token]));
+      const tokensByClass = new Map(tokens.map(token => [token.symbol, token]));
       const pairs: TradingPair[] = [];
       const quoteMap: QuoteMap = new Map();
 
-      for (const [tokenClassA, tokenClassB] of getSupportedTokenClassPairs()) {
-        const tokenA = tokensByClass.get(tokenClassA);
-        const tokenB = tokensByClass.get(tokenClassB);
+      for (const [tokenSymbolA, tokenSymbolB] of getSupportedTokenClassPairs()) {
+        const tokenA = tokensByClass.get(tokenSymbolA);
+        const tokenB = tokensByClass.get(tokenSymbolB);
 
         if (!tokenA || !tokenB) {
-          console.warn(`⚠️  Missing token information for pair ${tokenClassA} <-> ${tokenClassB}`);
+          console.warn(`⚠️  Missing token information for pair ${tokenSymbolA} <-> ${tokenSymbolB}`);
           continue;
         }
+
+        const tokenClassA = tokenA.tokenClass;
+        const tokenClassB = tokenB.tokenClass;
 
         try {
           const quoteAB = await this.getQuote(tokenClassA, tokenClassB, 1);

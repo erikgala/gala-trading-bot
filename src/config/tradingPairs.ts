@@ -1,8 +1,23 @@
+import { TokenInfo } from "../api/types";
+
 type SymbolPair = readonly [string, string];
 
 type ClassPair = readonly [string, string];
 
-const toTokenClass = (symbol: string): string => `${symbol}|Unit|none|none`;
+const toTokenClass = (symbol: string): string => {
+  const test = SUPPORTED_TOKENS.find(token => token.symbol === symbol)?.tokenClass ?? '';
+  return test;
+};
+
+export const SUPPORTED_TOKENS: TokenInfo[] = [
+  { symbol: 'GALA', name: 'Gala', decimals: 8, tokenClass: 'GALA|Unit|none|none', price: 0, priceChange24h: 0 },
+  { symbol: 'GUSDC', name: 'Gala USD Coin', decimals: 6, tokenClass: 'GUSDC|Unit|none|none', price: 0, priceChange24h: 0 },
+  { symbol: 'GUSDT', name: 'Gala Tether', decimals: 6, tokenClass: 'GUSDT|Unit|none|none', price: 0, priceChange24h: 0 },
+  { symbol: 'GWETH', name: 'Gala Wrapped Ethereum', decimals: 18, tokenClass: 'GWETH|Unit|none|none', price: 0, priceChange24h: 0 },
+  { symbol: 'GWBTC', name: 'Gala Wrapped Bitcoin', decimals: 8, tokenClass: 'GWBTC|Unit|none|none', price: 0, priceChange24h: 0 },
+  { symbol: 'GSOL', name: 'Gala Wrapped Solana', decimals: 9, tokenClass: 'GSOL|Unit|none|none', price: 0, priceChange24h: 0 },
+  { symbol: 'BENE', name: 'Benefactor', decimals: 9, tokenClass: 'Token|Unit|BENE|client:5c806869e7fd0e2384461ce9', price: 0, priceChange24h: 0 }
+];
 
 const SUPPORTED_SYMBOL_PAIRS: SymbolPair[] = [
   ['GALA', 'GUSDT'],
@@ -34,5 +49,5 @@ export function isSupportedPair(tokenClassA: string, tokenClassB: string): boole
 }
 
 export function getSupportedTokenClassPairs(): ClassPair[] {
-  return [...SUPPORTED_TOKEN_CLASS_PAIRS];
+  return [...SUPPORTED_SYMBOL_PAIRS];
 }

@@ -4,16 +4,7 @@ import type {
   GalaSwapTokenListResponse,
   TokenInfo
 } from './types';
-
-const FALLBACK_TOKENS: TokenInfo[] = [
-  { symbol: 'GALA', name: 'Gala', decimals: 8, tokenClass: 'GALA|Unit|none|none', price: 0, priceChange24h: 0 },
-  { symbol: 'GUSDC', name: 'Gala USD Coin', decimals: 6, tokenClass: 'GUSDC|Unit|none|none', price: 0, priceChange24h: 0 },
-  { symbol: 'GUSDT', name: 'Gala Tether', decimals: 6, tokenClass: 'GUSDT|Unit|none|none', price: 0, priceChange24h: 0 },
-  { symbol: 'GWETH', name: 'Gala Wrapped Ethereum', decimals: 18, tokenClass: 'GWETH|Unit|none|none', price: 0, priceChange24h: 0 },
-  { symbol: 'GWBTC', name: 'Gala Wrapped Bitcoin', decimals: 8, tokenClass: 'GWBTC|Unit|none|none', price: 0, priceChange24h: 0 },
-  { symbol: 'GSOL', name: 'Gala Wrapped Solana', decimals: 9, tokenClass: 'GSOL|Unit|none|none', price: 0, priceChange24h: 0 },
-  { symbol: 'BENE', name: 'Benefactor', decimals: 9, tokenClass: 'Token|Unit|BENE|client:5c806869e7fd0e2384461ce9', price: 0, priceChange24h: 0 }
-];
+import { SUPPORTED_TOKENS } from '../config/tradingPairs';
 
 export interface TokenRegistryOptions {
   galaSwapApiUrl: string;
@@ -37,25 +28,7 @@ export class TokenRegistry {
     if (this.tokensLoaded) {
       return;
     }
-
-    // try {
-    //   console.log('🔄 Loading available tokens from GalaSwap API...');
-    //   const data = await this.fetchTokenList();
-
-    //   if (data.status === 200 && data.data?.token) {
-    //     this.availableTokens = data.data.token.map(this.transformToken);
-    //     console.log(`✅ Loaded ${this.availableTokens.length} available tokens from GalaSwap`);
-    //   } else {
-    //     throw new Error('Failed to load tokens from GalaSwap API');
-    //   }
-    // } catch (error) {
-    //   console.error('❌ Failed to load available tokens:', error);
-    //   this.availableTokens = [...FALLBACK_TOKENS];
-    //   console.log('⚠️  Using fallback token list');
-    // } finally {
-    //   this.tokensLoaded = true;
-    // }
-    this.availableTokens = [...FALLBACK_TOKENS];
+    this.availableTokens = [...SUPPORTED_TOKENS];
     this.tokensLoaded = true;
   }
 
@@ -110,17 +83,6 @@ export class TokenRegistry {
   private async fetchTokenList(): Promise<GalaSwapTokenListResponse> {
     const response = await this.fetchFn(`${this.options.galaSwapApiUrl}/user/token-list?search=&page=1&limit=20`);
     return await response.json() as GalaSwapTokenListResponse;
-  }
-
-  private transformToken(token: GalaSwapToken): TokenInfo {
-    return {
-      symbol: token.symbol,
-      name: token.name,
-      decimals: parseInt(token.decimals, 10),
-      tokenClass: token.compositeKey.replace(/\$/g, '|'),
-      price: 0,
-      priceChange24h: 0,
-    };
   }
 }
 
